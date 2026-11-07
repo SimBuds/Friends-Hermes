@@ -1118,11 +1118,13 @@ repos, and one ended in a colon with no template after it.)
   tools, no `memory`, no `session_search`. `skills.write_approval` is `true`
   and `auxiliary.background_review.enabled` is `false`. Discord access is a
   user ID allowlist only: no role list, no allow-all key, and no
-  `DISCORD_ALLOWED_CHANNELS` without the user list, because in v0.22.7 a
-  channel list alone opens the bot to everyone in the channel. Channel
-  history backfill is off, so earlier messages are not pulled into context.
-  (Casey, 2026-11-07. Backfill and channel findings from the v0.22.7 Discord
-  docs, 2026-11-07.)
+  `DISCORD_ALLOWED_CHANNELS` without the user list, because a channel list
+  alone opens the bot to everyone in the channel. Channel history backfill
+  is off, so earlier messages are not pulled into context. No pairing grant
+  is ever approved, because an approved pairing passes before the
+  allowlist is checked. (Casey, 2026-11-07. Channel, backfill and pairing
+  behavior read in the v0.23.0 source, `plugins/platforms/discord/adapter.py`
+  `_is_allowed_user`, 2026-11-07.)
 - **Nothing is shared with Auto-Agent's VM.** No memory, sessions, skills,
   tokens, Telegram, snapshots, or SSH key reuse between the two. Auto-Agent's
   repo is read for patterns and never edited from here. This VM's SSH port

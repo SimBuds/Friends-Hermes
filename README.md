@@ -181,12 +181,113 @@ sudo sshd -t && echo "sshd config OK"
 sudo systemctl reload ssh
 ```
 
-Discord setup is written in Phase 3.
+## Discord
+
+Friends talk to Hermes in your private Discord server, or by DM. The
+gateway answers only the user IDs you list, gives each friend their own
+session, and offers chats the web tools only. It runs in a terminal you
+start, never as a service. The token stays in the VM's `~/.hermes/.env`.
+
+Checked against the v0.23.0 source (2026-11-07):
+
+- With a user ID list set, unknown DMs are ignored and get no pairing code.
+- `DISCORD_ALLOWED_CHANNELS` with no user list opens the channel to
+  everyone in it, so it is never set without the list.
+- Channel history backfill is on by default and pulls up to 50 earlier
+  messages into context, so it is turned off.
+
+### 1. Create the bot (Discord website, by you)
+
+1. In the [Developer Portal](https://discord.com/developers/applications),
+   create an application. Under **Bot**, turn **Public Bot** off, turn
+   **Message Content Intent** on, and leave **Server Members Intent** off
+   (numeric IDs do not need it). Reset the token and keep it for the setup
+   prompt only, never in a command line, chat or note.
+2. Under **OAuth2, URL Generator**, pick the scopes `bot` and
+   `applications.commands`, and the permissions View Channels, Send
+   Messages, Send Messages in Threads, Create Public Threads, Read Message
+   History and Add Reactions. Open the URL and add the bot to your private
+   server.
+3. In Discord, turn on **Settings, Advanced, Developer Mode**. Right-click
+   each friend (and yourself), **Copy User ID**.
+
+### 2. Configure the gateway
+
+```bash
+# Runs in: inside the VM. Interactive: choose Discord, paste the token, give the user IDs comma-separated. Skip any service install.
+hermes gateway setup
+```
+
+```bash
+# Runs in: inside the VM. Safe to run twice: each line overwrites or skips.
+hermes config set platform_toolsets.discord "[web]"
+ENVF=~/.hermes/.env
+if grep -q '^DISCORD_HISTORY_BACKFILL=' "$ENVF"; then echo "skip: DISCORD_HISTORY_BACKFILL already set"; else
+  echo 'DISCORD_HISTORY_BACKFILL=false' >> "$ENVF" && echo "added DISCORD_HISTORY_BACKFILL=false"; fi
+grep -n -A3 '^  discord:' ~/.hermes/config.yaml                     # must list only web
+grep -c '^DISCORD_BOT_TOKEN=' "$ENVF"                                # must print 1 (a count, never the token)
+grep '^DISCORD_ALLOWED_USERS=' "$ENVF" | cut -d= -f2 | tr -d "\"' " | tr ',' '\n' | grep -c -E '^[0-9]{17,20}$'   # must print the number of IDs you gave
+grep -c -E '^(DISCORD_ALLOWED_ROLES|DISCORD_ALLOWED_CHANNELS|DISCORD_ALLOW_ALL_USERS|GATEWAY_ALLOW_ALL_USERS|GATEWAY_ALLOWED_USERS)=' "$ENVF"   # must print 0
+grep '^DISCORD_HISTORY_BACKFILL=' "$ENVF"                            # must print DISCORD_HISTORY_BACKFILL=false
+hermes tools list --platform discord                                 # enabled: web_search and web_extract only
+hermes pairing list                                                  # no approved users
+```
+
+The ID count only counts 17 to 20 digit numbers, so a typo or a username
+shows up as a lower count. If any check is off, fix it before step 3.
+
+### 3. Run it
+
+```bash
+# Runs in: inside the VM, in a terminal you keep open. Ctrl+C stops it.
+hermes gateway run
+```
+
+Friends then @mention the bot in a server channel (each mention opens a
+thread), or DM it. Messages sent while it is stopped are dropped.
+
+To check the allowlist, send the bot a DM and an @mention from an account
+that is not on the list. Both must get no reply, and the gateway log must
+show `Unauthorized user`.
 
 ## Tools
 
-Written in Phases 4 to 6 (odds and stats collectors and the plugin).
+### Odds collector
+
+`tools/odds_collect.py` reads [The Odds API](https://the-odds-api.com) v4:
+odds and lines per bookmaker, scores, and the list of in-season sports. It
+uses only the Python standard library and runs inside the VM, where the key
+is. Each result is JSON with `source`, `fetched_at` (when the API answered,
+kept through the cache) and `credits_remaining`. Odds are American format.
+
+```bash
+# Runs in: inside the VM. Prints JSON, logs to stderr.
+python3 odds_collect.py sports                              # free, no credits
+python3 odds_collect.py odds basketball_nba                 # h2h,spreads,totals for US books: 3 credits
+python3 odds_collect.py odds basketball_nba h2h             # 1 credit
+python3 odds_collect.py scores basketball_nba 3             # with the last 3 days of results: 2 credits
+```
+
+| Setting | Default | What it does |
+|---|---|---|
+| `ODDS_API_KEY` | none, required | Your key, in `~/.hermes/.env` only |
+| `FH_CONTACT` | none, required | Contact address in the User-Agent |
+| `FH_CACHE_DIR` | `~/.cache/friends-hermes` | Cache and the last known quota, under `odds/` |
+| `ODDS_CACHE_TTL` | `600` | Seconds a response is reused |
+| `ODDS_QUOTA_FLOOR` | `25` | Paid calls stop when fewer credits remain. Cached answers and the sports list still work |
+
+Exit codes: 0 ok, 1 a missing or refused key or contact, 2 bad input (sport,
+market, region, days), 3 the API failed or the quota floor was reached.
+
+The key is sent as the `apiKey` query parameter, as the API requires, and
+is stripped from every log line, cache file name and error.
 
 ## Tests
 
-None yet.
+No network and no key: a fake fetch serves the sample responses from The
+Odds API's v4 guide, saved in `tools/fixtures/odds/`.
+
+```bash
+# Runs in: local terminal, host, in this repo. Must end with failed=0 and exit 0.
+python3 tools/test_odds_collect.py    # passed=26
+```
