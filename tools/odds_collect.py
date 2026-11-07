@@ -2,13 +2,16 @@
 """Fetch odds, lines and scores from The Odds API (v4) for the Discord tools.
 
 Runs inside the VM, where the key lives in ~/.hermes/.env:
-    python3 tools/odds_collect.py odds basketball_nba [h2h,spreads,totals]
-    python3 tools/odds_collect.py scores basketball_nba [days_from]
+    python3 tools/odds_collect.py odds basketball_nba [h2h,spreads,totals] [--fresh]
+    python3 tools/odds_collect.py scores basketball_nba [days_from] [--fresh]
     python3 tools/odds_collect.py sports
 
 Prints one JSON object. Every result carries `source` and `fetched_at`
 (the time the API answered, kept through the cache), so an answer can cite
-both. Numbers are copied from the API, never computed or rounded here.
+both, and `from_cache`. A cached answer is reused for 6 hours. `--fresh`
+(a friend asking for current numbers) refetches, but only when the cached
+answer is at least 10 minutes old, so repeated requests cannot drain the
+quota. Numbers are copied from the API, never computed or rounded here.
 
 The pattern (one HTTP path with cache, per-host spacing, backoff on 429
 and 5xx) is ported from Auto-Agent's jobs/news-collect.py.
@@ -87,7 +90,8 @@ def settings():
     cache = os.environ.get("FH_CACHE_DIR") or os.path.expanduser("~/.cache/friends-hermes")
     return {
         "key": key, "contact": contact, "cache_dir": os.path.join(cache, "odds"),
-        "ttl": env_int("ODDS_CACHE_TTL", 600), "floor": env_int("ODDS_QUOTA_FLOOR", 25),
+        "ttl": env_int("ODDS_CACHE_TTL", 6 * 3600), "floor": env_int("ODDS_QUOTA_FLOOR", 25),
+        "fresh_min": env_int("ODDS_FRESH_MIN_AGE", 600),
     }
 
 
@@ -133,16 +137,18 @@ def _save_quota(cfg, header):
         json.dump({"remaining": remaining, "at": _iso(time.time())}, f)
 
 
-def get(path, params, cfg, fetch, paid=True):
-    """The one HTTP path. Returns (data, fetched_at ISO string)."""
+def get(path, params, cfg, fetch, paid=True, fresh=False):
+    """The one HTTP path. Returns (data, fetched_at ISO string, from_cache)."""
     os.makedirs(cfg["cache_dir"], exist_ok=True)
     url = f"{API}{path}?" + urllib.parse.urlencode({**params, "apiKey": cfg["key"]})
     safe = redact(url)
     cached = os.path.join(cfg["cache_dir"], hashlib.sha256(safe.encode()).hexdigest() + ".json")
-    if os.path.exists(cached) and time.time() - os.path.getmtime(cached) < cfg["ttl"]:
-        log(f"cache {safe}")
-        with open(cached) as f:
-            return json.load(f), _iso(os.path.getmtime(cached))
+    if os.path.exists(cached):
+        age = time.time() - os.path.getmtime(cached)
+        if age < cfg["ttl"] and not (fresh and age >= cfg["fresh_min"]):
+            log(f"cache {safe} (age {age:.0f} s{', too new to refetch' if fresh else ''})")
+            with open(cached) as f:
+                return json.load(f), _iso(os.path.getmtime(cached)), True
     remaining = read_quota(cfg)
     if paid and remaining is not None and remaining < cfg["floor"]:
         raise QuotaError(f"{remaining} credits left, below the floor of {cfg['floor']}. "
@@ -163,7 +169,7 @@ def get(path, params, cfg, fetch, paid=True):
                 raise SourceError("api.the-odds-api.com: response was not JSON") from None
             with open(cached, "w") as f:
                 json.dump(data, f)
-            return data, _iso(os.path.getmtime(cached))
+            return data, _iso(os.path.getmtime(cached)), False
         if status == 429 or status >= 500:
             log(f"api.the-odds-api.com answered {status}")
             if attempt < RETRIES:
@@ -195,13 +201,14 @@ def _check_sport(sport):
 
 def sports(cfg, fetch):
     """In-season sports. Costs no credits."""
-    data, fetched_at = get("/sports/", {}, cfg, fetch, paid=False)
-    return {"source": SOURCE, "fetched_at": fetched_at, "credits_remaining": read_quota(cfg),
+    data, fetched_at, from_cache = get("/sports/", {}, cfg, fetch, paid=False)
+    return {"source": SOURCE, "fetched_at": fetched_at, "from_cache": from_cache,
+            "credits_remaining": read_quota(cfg),
             "sports": [{"key": s["key"], "title": s["title"], "group": s["group"]}
                        for s in data if s.get("active")]}
 
 
-def odds(cfg, fetch, sport, markets=("h2h", "spreads", "totals"), regions=("us",)):
+def odds(cfg, fetch, sport, markets=("h2h", "spreads", "totals"), regions=("us",), fresh=False):
     """Lines per bookmaker for upcoming and live games. Costs markets x regions credits."""
     _check_sport(sport)
     markets, regions = sorted(set(markets)), sorted(set(regions))
@@ -211,7 +218,7 @@ def odds(cfg, fetch, sport, markets=("h2h", "spreads", "totals"), regions=("us",
         raise InputError(f"regions must be some of {sorted(REGIONS)}, got {regions}")
     params = {"regions": ",".join(regions), "markets": ",".join(markets),
               "oddsFormat": "american", "dateFormat": "iso"}
-    data, fetched_at = get(f"/sports/{sport}/odds/", params, cfg, fetch)
+    data, fetched_at, from_cache = get(f"/sports/{sport}/odds/", params, cfg, fetch, fresh=fresh)
     events = [{
         "id": e["id"], "commence_time": e["commence_time"],
         "home_team": e["home_team"], "away_team": e["away_team"],
@@ -221,12 +228,12 @@ def odds(cfg, fetch, sport, markets=("h2h", "spreads", "totals"), regions=("us",
                                    for o in m["outcomes"]] for m in b["markets"]},
         } for b in e.get("bookmakers", [])],
     } for e in data]
-    return {"source": SOURCE, "fetched_at": fetched_at, "credits_remaining": read_quota(cfg),
-            "sport": sport, "markets": markets, "regions": regions, "odds_format": "american",
+    return {"source": SOURCE, "fetched_at": fetched_at, "from_cache": from_cache,
+            "credits_remaining": read_quota(cfg), "sport": sport, "markets": markets, "regions": regions, "odds_format": "american",
             "events": events}
 
 
-def scores(cfg, fetch, sport, days_from=None):
+def scores(cfg, fetch, sport, days_from=None, fresh=False):
     """Live and upcoming games, plus completed ones from up to 3 days back. Costs 1 credit, 2 with days_from."""
     _check_sport(sport)
     params = {"dateFormat": "iso"}
@@ -234,14 +241,14 @@ def scores(cfg, fetch, sport, days_from=None):
         if not isinstance(days_from, int) or not 1 <= days_from <= 3:
             raise InputError(f"days_from must be 1, 2 or 3, got {days_from!r}")
         params["daysFrom"] = days_from
-    data, fetched_at = get(f"/sports/{sport}/scores/", params, cfg, fetch)
+    data, fetched_at, from_cache = get(f"/sports/{sport}/scores/", params, cfg, fetch, fresh=fresh)
     games = [{
         "id": g["id"], "commence_time": g["commence_time"], "completed": bool(g.get("completed")),
         "home_team": g["home_team"], "away_team": g["away_team"],
         "scores": g.get("scores"), "last_update": g.get("last_update"),
     } for g in data]
-    return {"source": SOURCE, "fetched_at": fetched_at, "credits_remaining": read_quota(cfg),
-            "sport": sport, "games": games}
+    return {"source": SOURCE, "fetched_at": fetched_at, "from_cache": from_cache,
+            "credits_remaining": read_quota(cfg), "sport": sport, "games": games}
 
 
 def main(argv):
@@ -251,20 +258,23 @@ def main(argv):
         def fetch(url):
             return http_fetch(url, cfg["contact"])
 
+        fresh = "--fresh" in argv
+        argv = [a for a in argv if a != "--fresh"]
         cmd = argv[0] if argv else ""
         if cmd == "sports" and len(argv) == 1:
             result = sports(cfg, fetch)
         elif cmd == "odds" and len(argv) in (2, 3):
-            result = odds(cfg, fetch, argv[1], *([argv[2].split(",")] if len(argv) == 3 else []))
+            markets = argv[2].split(",") if len(argv) == 3 else ("h2h", "spreads", "totals")
+            result = odds(cfg, fetch, argv[1], markets, fresh=fresh)
         elif cmd == "scores" and len(argv) in (2, 3):
             days = None
             if len(argv) == 3:
                 if not argv[2].isdigit():
                     raise InputError(f"days must be 1, 2 or 3, got {argv[2]!r}")
                 days = int(argv[2])
-            result = scores(cfg, fetch, argv[1], days)
+            result = scores(cfg, fetch, argv[1], days, fresh=fresh)
         else:
-            raise InputError("usage: odds_collect.py sports | odds SPORT [MARKETS] | scores SPORT [DAYS]")
+            raise InputError("usage: odds_collect.py sports | odds SPORT [MARKETS] [--fresh] | scores SPORT [DAYS] [--fresh]")
     except ConfigError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1

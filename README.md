@@ -258,7 +258,12 @@ show `Unauthorized user`.
 odds and lines per bookmaker, scores, and the list of in-season sports. It
 uses only the Python standard library and runs inside the VM, where the key
 is. Each result is JSON with `source`, `fetched_at` (when the API answered,
-kept through the cache) and `credits_remaining`. Odds are American format.
+kept through the cache), `from_cache` and `credits_remaining`. Odds are
+American format, and the default markets are moneyline, spread and total.
+
+An answer is reused for 6 hours. `--fresh` refetches when a friend asks for
+current numbers, but only if the cached answer is at least 10 minutes old,
+so asking again and again cannot drain the quota.
 
 ```bash
 # Runs in: inside the VM. Prints JSON, logs to stderr.
@@ -266,15 +271,17 @@ python3 odds_collect.py sports                              # free, no credits
 python3 odds_collect.py odds basketball_nba                 # h2h,spreads,totals for US books: 3 credits
 python3 odds_collect.py odds basketball_nba h2h             # 1 credit
 python3 odds_collect.py scores basketball_nba 3             # with the last 3 days of results: 2 credits
+python3 odds_collect.py odds basketball_nba --fresh         # refetch if the cached answer is 10 minutes old or more
 ```
 
-| Setting | Default | What it does |
-|---|---|---|
-| `ODDS_API_KEY` | none, required | Your key, in `~/.hermes/.env` only |
-| `FH_CONTACT` | none, required | Contact address in the User-Agent |
-| `FH_CACHE_DIR` | `~/.cache/friends-hermes` | Cache and the last known quota, under `odds/` |
-| `ODDS_CACHE_TTL` | `600` | Seconds a response is reused |
-| `ODDS_QUOTA_FLOOR` | `25` | Paid calls stop when fewer credits remain. Cached answers and the sports list still work |
+| Setting              | Default                     | What it does                                                                             |
+| -------------------- | --------------------------- | ---------------------------------------------------------------------------------------- |
+| `ODDS_API_KEY`     | none, required              | Your key, in `~/.hermes/.env` only                                                     |
+| `FH_CONTACT`       | none, required              | Contact address in the User-Agent                                                        |
+| `FH_CACHE_DIR`     | `~/.cache/friends-hermes` | Cache and the last known quota, under `odds/`                                          |
+| `ODDS_CACHE_TTL`   | `21600` (6 hours)         | Seconds a response is reused                                                             |
+| `ODDS_FRESH_MIN_AGE`| `600` (10 minutes)        | A fresh request refetches only a cached answer at least this old                         |
+| `ODDS_QUOTA_FLOOR` | `25`                      | Paid calls stop when fewer credits remain. Cached answers and the sports list still work |
 
 Exit codes: 0 ok, 1 a missing or refused key or contact, 2 bad input (sport,
 market, region, days), 3 the API failed or the quota floor was reached.
@@ -289,5 +296,5 @@ Odds API's v4 guide, saved in `tools/fixtures/odds/`.
 
 ```bash
 # Runs in: local terminal, host, in this repo. Must end with failed=0 and exit 0.
-python3 tools/test_odds_collect.py    # passed=26
+python3 tools/test_odds_collect.py    # passed=33
 ```

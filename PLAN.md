@@ -38,6 +38,13 @@ All made by Casey on 2026-11-07 unless noted.
   feed. Chat answers to a few friends are the first kind. The collector
   caches responses and stops fetching when the remaining quota falls below
   a floor. Moving to the paid 20K plan changes only the key.
+- **Cached odds are reused for 6 hours, and a friend can ask for fresh
+  ones** (Casey, 2026-11-07). A fresh request refetches only when the cached
+  answer is at least 10 minutes old, which stops repeated requests from
+  draining credits while there is no per-friend rate limit. Every answer
+  shows its fetch time, so a reused one is never passed off as current.
+  The default markets stay moneyline, spread and total (3 credits a pull):
+  about 158 fresh full pulls a month on the free plan's 475 usable credits.
 - **Stats, scores, and schedules from [TheSportsDB](https://www.thesportsdb.com).**
   Its terms and limits are read, and recorded here, before the stats
   collector is built.

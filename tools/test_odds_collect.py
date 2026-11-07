@@ -164,6 +164,82 @@ class Cache(Base):
         self.assertEqual(len(fetch.urls), 1)
 
 
+class Fresh(Base):
+    def age_cache(self, seconds):
+        for root, _, files in os.walk(os.path.join(self.tmp.name, "odds")):
+            for name in files:
+                if name != "quota.json":
+                    path = os.path.join(root, name)
+                    t = os.path.getmtime(path) - seconds
+                    os.utime(path, (t, t))
+
+    def test_default_reuse_is_six_hours(self):
+        self.assertEqual(self.cfg()["ttl"], 6 * 3600)
+        cfg = self.cfg()
+        oc.odds(cfg, FakeFetch(ok("odds.json")), "americanfootball_nfl")
+        self.age_cache(5 * 3600)
+        r = oc.odds(cfg, FakeFetch(), "americanfootball_nfl")
+        self.assertTrue(r["from_cache"])
+        self.age_cache(2 * 3600)
+        fetch = FakeFetch(ok("odds.json"))
+        r = oc.odds(cfg, fetch, "americanfootball_nfl")
+        self.assertEqual(len(fetch.urls), 1)
+        self.assertFalse(r["from_cache"])
+
+    def test_fresh_refetches_when_cache_is_old_enough(self):
+        cfg = self.cfg()
+        oc.odds(cfg, FakeFetch(ok("odds.json")), "americanfootball_nfl")
+        self.age_cache(11 * 60)
+        fetch = FakeFetch(ok("odds.json"))
+        r = oc.odds(cfg, fetch, "americanfootball_nfl", fresh=True)
+        self.assertEqual(len(fetch.urls), 1)
+        self.assertFalse(r["from_cache"])
+
+    def test_fresh_serves_cache_younger_than_ten_minutes(self):
+        cfg = self.cfg()
+        oc.odds(cfg, FakeFetch(ok("odds.json")), "americanfootball_nfl")
+        self.age_cache(5 * 60)
+        r = oc.odds(cfg, FakeFetch(), "americanfootball_nfl", fresh=True)
+        self.assertTrue(r["from_cache"])
+
+    def test_fresh_scores(self):
+        cfg = self.cfg()
+        oc.scores(cfg, FakeFetch(ok("scores.json")), "basketball_nba")
+        self.age_cache(11 * 60)
+        fetch = FakeFetch(ok("scores.json"))
+        oc.scores(cfg, fetch, "basketball_nba", fresh=True)
+        self.assertEqual(len(fetch.urls), 1)
+
+    def test_fresh_with_no_cache_fetches(self):
+        fetch = FakeFetch(ok("odds.json"))
+        r = oc.odds(self.cfg(), fetch, "americanfootball_nfl", fresh=True)
+        self.assertEqual(len(fetch.urls), 1)
+        self.assertFalse(r["from_cache"])
+
+    def test_fresh_still_respects_quota_floor(self):
+        cfg = self.cfg()
+        oc.odds(cfg, FakeFetch(ok("odds.json", remaining="10")), "americanfootball_nfl")
+        self.age_cache(11 * 60)
+        with self.assertRaises(oc.QuotaError):
+            oc.odds(cfg, FakeFetch(), "americanfootball_nfl", fresh=True)
+
+    def test_cli_fresh_flag(self):
+        cfg = self.cfg()
+        oc.odds(cfg, FakeFetch(ok("odds.json")), "americanfootball_nfl")
+        self.age_cache(11 * 60)
+        seen = []
+        real = oc.http_fetch
+        oc.http_fetch = lambda url, contact: (seen.append(url), ok("odds.json"))[1]
+        try:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = oc.main(["odds", "americanfootball_nfl", "--fresh"])
+        finally:
+            oc.http_fetch = real
+        self.assertEqual((code, len(seen)), (0, 1))
+        self.assertFalse(json.loads(out.getvalue())["from_cache"])
+
+
 class Retries(Base):
     def test_429_then_success_backs_off(self):
         fetch = FakeFetch((429, b"", {}), ok("odds.json"))
