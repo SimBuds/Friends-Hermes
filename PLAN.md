@@ -10,7 +10,7 @@ from the model.
 
 ```text
 Host                                        VM (Debian, quickemu, port 22221)
-  llama.cpp router 127.0.0.1:8080  <-----     Hermes Agent v0.22.7, base_url http://10.0.2.2:8080/v1
+  llama.cpp router 127.0.0.1:8080  <-----     Hermes Agent v0.23.0, base_url http://10.0.2.2:8080/v1
                                               Discord gateway, allowlisted friends only
                                               plugin: odds tool, stats tool  -----> The Odds API, TheSportsDB
 Discord (friends) <------------------------>  gateway
@@ -102,7 +102,7 @@ secrets.
 | `~/.hermes/config.yaml` in the VM | Model, toolsets, Discord keys | Kept | Rolled back | Lost. The README blocks re-apply them |
 | `~/.hermes/plugins/` in the VM | The plugin, copied from this repo | Kept | Rolled back | Lost. Copied again from the repo |
 | Collector cache in the VM | Raw API responses | Kept | Rolled back | Lost, by design |
-| VM snapshots | Clean and configured states | Kept | Kept | Lost with the disk image |
+| VM snapshots in `~/VMs/friends-hermes` | `clean` (fresh install) and `hermes-configured` (Hermes v0.23.0, base config, SSH keys only), both 2026-11-07 | Kept | Kept | Lost with the disk image |
 
 The token, friends' IDs, and keys have no copy in this repo by design. A
 change made by hand in the VM is copied here in the same phase.
