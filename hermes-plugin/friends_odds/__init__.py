@@ -7,7 +7,7 @@ has to quote the `reply` text, never compose a number.
 """
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from . import odds_collect as oc
@@ -16,6 +16,13 @@ TOOLSET = "friends_odds"
 NOT_ADVICE = "Information only, not betting advice."
 QUOTE = ("Reply with the `reply` text exactly as given, in a code-free message. "
          "Do not change, round or add any number.")
+
+DAYS = {"today": 0, "tomorrow": 1}
+
+
+def now():
+    return datetime.now(timezone.utc)
+
 
 # Book order follows the API's response. Totals outcomes are Over and Under.
 MARKET_LABEL = {"h2h": "ML", "spreads": "Spread", "totals": "Total"}
@@ -62,8 +69,34 @@ def matches(team, *names):
     return not team or any(team in (n or "").lower() for n in names)
 
 
-def format_lines(result, team, zone):
+def local_date(iso, zone):
+    return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(zone).date()
+
+
+def pick_day(items, day, zone):
+    """(items on that local day, the first item after it or None, the day's label).
+    With no day, every item is kept. The date comes from the clock in FH_TIMEZONE, never the model."""
+    if not day:
+        return items, None, ""
+    target = now().astimezone(zone).date() + timedelta(days=DAYS[day])
+    on = [i for i in items if local_date(i["commence_time"], zone) == target]
+    later = sorted((i for i in items if local_date(i["commence_time"], zone) > target),
+                   key=lambda i: i["commence_time"])
+    return on, (later[0] if later else None), f"{day} ({target:%a %b %d})"
+
+
+def no_game(what, label, nxt, zone):
+    if nxt is None:
+        return f"No {what} {label}, and none later."
+    return f"No {what} {label}. Next: {nxt['away_team']} at {nxt['home_team']}, {when(nxt['commence_time'], zone)}."
+
+
+def format_lines(result, team, zone, day=None):
     events = [e for e in result["events"] if matches(team, e["home_team"], e["away_team"])]
+    events, nxt, label = pick_day(events, day, zone)
+    if not events and day:
+        what = f"{team or result['sport']} game with lines"
+        return no_game(what, label, nxt, zone) + "\n" + footer(result, zone)
     if not events:
         head = f"No {result['sport']} games with lines" + (f" for '{team}'." if team else ".")
         return f"{head}\n{footer(result, zone)}"
@@ -84,8 +117,12 @@ def format_lines(result, team, zone):
     return "\n".join(out)
 
 
-def format_scores(result, team, zone):
+def format_scores(result, team, zone, day=None):
     games = [g for g in result["games"] if matches(team, g["home_team"], g["away_team"])]
+    games, nxt, label = pick_day(games, day, zone)
+    if not games and day:
+        what = f"{team or result['sport']} game"
+        return no_game(what, label, nxt, zone) + "\n" + footer(result, zone)
     if not games:
         head = f"No {result['sport']} games" + (f" for '{team}'." if team else ".")
         return f"{head}\n{footer(result, zone)}"
@@ -122,16 +159,22 @@ def run(kind, params, fetch=None):
         fetch = fetch or _fetch(cfg)
         team = params.get("team")
         fresh = bool(params.get("fresh"))
+        day = params.get("day") or None
+        if day is not None and day not in DAYS:
+            raise oc.InputError(f"day must be today or tomorrow, got {day!r}")
         if kind == "sports":
             result = oc.sports(cfg, fetch)
             reply = format_sports(result, zone)
         elif kind == "lines":
             markets = params.get("markets") or ["h2h", "spreads", "totals"]
             result = oc.odds(cfg, fetch, params.get("sport", ""), markets, fresh=fresh)
-            reply = format_lines(result, team, zone)
+            reply = format_lines(result, team, zone, day)
         else:
-            result = oc.scores(cfg, fetch, params.get("sport", ""), params.get("days_from"), fresh=fresh)
-            reply = format_scores(result, team, zone)
+            days_from = params.get("days_from")
+            if day == "today" and days_from is None:
+                days_from = 1  # without it the API returns no games already finished today
+            result = oc.scores(cfg, fetch, params.get("sport", ""), days_from, fresh=fresh)
+            reply = format_scores(result, team, zone, day)
     except oc.OddsError as e:
         return json.dumps({"success": False, "error": str(e), "instructions":
                            "Tell the user this error plainly. Do not guess any number."})
@@ -141,6 +184,9 @@ def run(kind, params, fetch=None):
 
 SPORT = {"type": "string", "description": "Sport key from odds_sports, such as basketball_nba or americanfootball_nfl."}
 TEAM = {"type": "string", "description": "Part of a team name, such as 'Lakers'. Leave out to list the games."}
+DAY = {"type": "string", "enum": ["today", "tomorrow"],
+       "description": "today for tonight or today, tomorrow for tomorrow. Leave out for every upcoming game. "
+       "The date is worked out by the tool in the bot's time zone."}
 FRESH = {"type": "boolean", "description": "True only when the user asks for current or updated numbers. "
          "Otherwise a cached answer up to 6 hours old is used, and its time is shown."}
 
@@ -155,7 +201,7 @@ SCHEMAS = {
         "description": ("Betting lines (moneyline, spread, total) per US sportsbook from The Odds API. "
                         "Without `team` it lists the games. With `team` it gives each book's prices. " + QUOTE),
         "parameters": {"type": "object", "properties": {
-            "sport": SPORT, "team": TEAM, "fresh": FRESH,
+            "sport": SPORT, "team": TEAM, "day": DAY, "fresh": FRESH,
             "markets": {"type": "array", "items": {"type": "string", "enum": ["h2h", "spreads", "totals"]},
                         "description": "Leave out for all three. h2h is the moneyline."},
         }, "required": ["sport"]},
@@ -165,7 +211,7 @@ SCHEMAS = {
         "description": ("Live and upcoming games with scores, and finals from up to 3 days back, from The Odds API. "
                         + QUOTE),
         "parameters": {"type": "object", "properties": {
-            "sport": SPORT, "team": TEAM, "fresh": FRESH,
+            "sport": SPORT, "team": TEAM, "day": DAY, "fresh": FRESH,
             "days_from": {"type": "integer", "minimum": 1, "maximum": 3,
                           "description": "Include finals from this many days back. Leave out for live and upcoming only."},
         }, "required": ["sport"]},

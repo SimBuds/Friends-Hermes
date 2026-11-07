@@ -2,8 +2,8 @@
 
 [Hermes Agent](https://github.com/NousResearch/hermes-agent) in a QEMU VM,
 answering a few friends in a private Discord server as a sports-betting
-research assistant: odds and lines across books, scores, schedules, and
-stats. It does not bet, and every number comes from a documented API with
+research assistant: odds and lines across books, scores, and schedules
+(stats are not in v1). It does not bet, and every number comes from a documented API with
 its source and fetch time. Information, not betting advice.
 
 It uses the Local-LLM router on the host (`qwen`, context 131,072) and runs
@@ -380,6 +380,11 @@ text as given.
   cached.
 - `odds_scores`: live and upcoming games, and finals up to 3 days back.
 
+Both `odds_lines` and `odds_scores` take `day` (`today` or `tomorrow`). The
+tool works out the date in `FH_TIMEZONE` and keeps only that day's games.
+With none, it says so and names the next game. A `today` scores question
+also fetches today's finals, which costs 2 credits instead of 1.
+
 `FH_TIMEZONE` (default `UTC`) sets the time zone of the times shown.
 
 ## Tests
@@ -390,5 +395,5 @@ Odds API's v4 guide, saved in `tools/fixtures/odds/`.
 ```bash
 # Runs in: local terminal, host, in this repo. Must end with failed=0 and exit 0.
 python3 tools/test_odds_collect.py       # passed=33
-python3 hermes-plugin/test_friends_odds.py  # passed=20
+python3 hermes-plugin/test_friends_odds.py  # passed=35
 ```

@@ -2,8 +2,8 @@
 
 A second Hermes Agent, in its own QEMU VM on Casey's workstation, that
 answers Casey's friends in a private Discord server as a sports-betting
-research assistant. It reports odds, lines, scores, schedules, and stats. It
-never bets, and every number in an answer comes from a documented API, not
+research assistant. It reports odds, lines, scores, and schedules (stats
+are not in v1). It never bets, and every number in an answer comes from a documented API, not
 from the model.
 
 ## The shape of it
@@ -12,7 +12,7 @@ from the model.
 Host                                        VM (Debian, quickemu, port 22221)
   llama.cpp router 127.0.0.1:8080  <-----     Hermes Agent v0.23.0, base_url http://10.0.2.2:8080/v1
                                               Discord gateway, allowlisted friends only
-                                              plugin: odds tool, stats tool  -----> The Odds API, TheSportsDB
+                                              plugin: friends_odds tools  --------> The Odds API
 Discord (friends) <------------------------>  gateway
 ```
 
@@ -31,8 +31,8 @@ All made by Casey on 2026-11-07 unless noted.
   Casey boots the VM by hand, and the gateway runs inside it as a user
   service that starts with the VM (kept 2026-11-07, after
   `hermes gateway setup` installed it).
-- **v1 scope:** odds and lines across books, plus scores, schedules, and
-  stats. Finance is out.
+- **v1 scope:** odds and lines across books, plus scores and schedules.
+  Finance is out, and so are stats (below).
 - **Odds from [The Odds API](https://the-odds-api.com), free Starter plan.**
   500 credits a month. An odds call costs markets times regions, so the
   three main markets for US books cost 3. Scores cost 1 (2 with `daysFrom`),
@@ -48,9 +48,20 @@ All made by Casey on 2026-11-07 unless noted.
   shows its fetch time, so a reused one is never passed off as current.
   The default markets stay moneyline, spread and total (3 credits a pull):
   about 158 fresh full pulls a month on the free plan's 475 usable credits.
-- **Stats, scores, and schedules from [TheSportsDB](https://www.thesportsdb.com).**
-  Its terms and limits are read, and recorded here, before the stats
-  collector is built.
+- **Scores and schedules come from The Odds API, and stats are out of v1**
+  (Casey, 2026-11-07). Planned first from TheSportsDB, whose terms limit the
+  free key to "development projects" and allow apps and services only on
+  paid plans ($9 a month). No free stats API both allows a friends' bot and
+  includes stats: balldontlie's terms allow it, but its free plan has only
+  teams, players, and games (stats $9.99 a month per league). MySportsFeeds
+  is for "individual use" from $5 a month per league. football-data.org is
+  soccer only. API-Sports refused every fetch of its terms. MLB's Stats API
+  is undocumented. If stats come back, the paid choices are TheSportsDB (all
+  sports) or balldontlie (one league each).
+- **"Today" and "tomorrow" are worked out by code** in `FH_TIMEZONE`, never
+  by the model, and a reply with no game that day names the next one. A
+  scores question about today also asks for one day of finals (2 credits,
+  not 1), because without it the API returns no game already finished.
 - **One Hermes plugin carries the tools.** Rejected: an MCP stdio server
   (a second process, and the deferred rate limit would still need a
   plugin hook) and a skill that runs a script (needs the terminal tool).
@@ -68,7 +79,7 @@ next-day delayed).
 1. A friend asks in the Discord server or by DM. The gateway answers only
    allowlisted user IDs, and keeps each friend's session separate
    (`group_sessions_per_user`, on by default).
-2. Hermes (`qwen`) picks the odds or stats tool and its arguments.
+2. Hermes (`qwen`) picks an odds tool and its arguments.
 3. The plugin calls the collector, which fetches the API (cached, rate
    limited per host, backoff on 429 and 5xx) and returns plain data with
    `source` and `fetched_at`.
@@ -131,9 +142,9 @@ change made by hand in the VM is copied here in the same phase.
 
 ## Open questions
 
-- Does `platform_toolsets.discord` accept the plugin's toolset name? Checked
-  in the plugin phase.
-- TheSportsDB's terms, free key, and rate limit.
+- Answered 2026-11-07: `platform_toolsets.discord` accepts the plugin's
+  toolset name (`[web, friends_odds]`, confirmed with
+  `hermes tools list --platform discord`).
 - System prompt size with the small toolset.
 
 ## Sources

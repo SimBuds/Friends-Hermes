@@ -197,6 +197,144 @@ class Lines(Base):
         self.assertNotIn(", cached.", r["reply"])
 
 
+class Day(Base):
+    """Now is pinned to Sat 2026-11-07 15:00 UTC (10:00 in New York)."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ["FH_TIMEZONE"] = "America/New_York"
+        from datetime import datetime, timezone
+        self.p.now = lambda: datetime(2026, 11, 7, 15, 0, tzinfo=timezone.utc)
+
+    def odds_with(self, *games):
+        """games: (away, home, commence_time) built on the fixture's first event."""
+        base = json.loads(fixture("odds.json"))[0]
+        out = []
+        for i, (away, home, t) in enumerate(games):
+            e = json.loads(json.dumps(base))
+            e.update({"id": f"g{i}", "away_team": away, "home_team": home, "commence_time": t})
+            out.append(e)
+        return 200, json.dumps(out).encode(), {}
+
+    def scores_with(self, *games):
+        out = [{"id": f"s{i}", "sport_key": "basketball_nba", "sport_title": "NBA", "commence_time": t,
+                "completed": done, "home_team": home, "away_team": away, "scores": sc, "last_update": None}
+               for i, (away, home, t, done, sc) in enumerate(games)]
+        return 200, json.dumps(out).encode(), {}
+
+    def test_today_with_a_game(self):
+        r = self.call("lines", {"sport": "basketball_nba", "team": "Lakers", "day": "today"},
+                      self.odds_with(("Boston Celtics", "Los Angeles Lakers", "2026-11-08T03:30:00Z"),
+                                     ("Utah Jazz", "Los Angeles Lakers", "2026-11-10T03:00:00Z")))
+        text = r["reply"]
+        self.assertIn("Boston Celtics at Los Angeles Lakers, Sat Nov 07 22:30 EST", text)
+        self.assertNotIn("Utah Jazz", text)
+        self.assertIn("  Unibet: ", text)
+
+    def test_today_none_names_the_next_game(self):
+        r = self.call("lines", {"sport": "basketball_nba", "team": "Lakers", "day": "today"},
+                      self.odds_with(("Philadelphia 76ers", "Los Angeles Lakers", "2026-12-25T22:00:00Z")))
+        text = r["reply"]
+        self.assertTrue(text.startswith("No Lakers game with lines today (Sat Nov 07). "
+                                        "Next: Philadelphia 76ers at Los Angeles Lakers, Fri Dec 25 17:00 EST."))
+        self.assertNotIn("Unibet", text)
+        self.assertTrue(text.endswith("Information only, not betting advice."))
+
+    def test_today_none_and_nothing_later(self):
+        r = self.call("lines", {"sport": "basketball_nba", "team": "Lakers", "day": "today"},
+                      self.odds_with(("Utah Jazz", "Denver Nuggets", "2026-11-08T02:00:00Z")))
+        self.assertTrue(r["reply"].startswith("No Lakers game with lines today (Sat Nov 07), and none later."))
+
+    def test_tomorrow(self):
+        r = self.call("lines", {"sport": "basketball_nba", "team": "Lakers", "day": "tomorrow"},
+                      self.odds_with(("Boston Celtics", "Los Angeles Lakers", "2026-11-08T03:30:00Z"),
+                                     ("Utah Jazz", "Los Angeles Lakers", "2026-11-08T20:00:00Z")))
+        self.assertIn("Utah Jazz at Los Angeles Lakers, Sun Nov 08 15:00 EST", r["reply"])
+        self.assertNotIn("Boston Celtics", r["reply"])
+
+    def test_no_day_keeps_every_game(self):
+        r = self.call("lines", {"sport": "basketball_nba", "team": "Lakers"},
+                      self.odds_with(("Boston Celtics", "Los Angeles Lakers", "2026-11-08T03:30:00Z"),
+                                     ("Utah Jazz", "Los Angeles Lakers", "2026-12-25T22:00:00Z")))
+        self.assertIn("Boston Celtics", r["reply"])
+        self.assertIn("Utah Jazz", r["reply"])
+
+    def test_just_after_midnight_local_is_the_next_day(self):
+        # 05:30 UTC on Nov 8 is 00:30 in New York on Nov 8: tomorrow, not today.
+        lines = self.odds_with(("Boston Celtics", "Los Angeles Lakers", "2026-11-08T05:30:00Z"))
+        r = self.call("lines", {"sport": "basketball_nba", "team": "Lakers", "day": "today"}, lines)
+        self.assertTrue(r["reply"].startswith("No Lakers game with lines today"))
+        r = self.call("lines", {"sport": "basketball_nba", "team": "Lakers", "day": "tomorrow"})
+        self.assertIn("Boston Celtics at Los Angeles Lakers, Sun Nov 08 00:30 EST", r["reply"])
+
+    def test_day_without_team_lists_that_days_games(self):
+        r = self.call("lines", {"sport": "basketball_nba", "day": "today"},
+                      self.odds_with(("Boston Celtics", "Los Angeles Lakers", "2026-11-08T03:30:00Z"),
+                                     ("Utah Jazz", "Denver Nuggets", "2026-11-09T02:00:00Z")))
+        self.assertIn("Boston Celtics at Los Angeles Lakers", r["reply"])
+        self.assertNotIn("Utah Jazz", r["reply"])
+        self.assertNotIn("Unibet", r["reply"])
+
+    def test_bad_day_is_an_error_with_no_fetch(self):
+        f = FakeFetch()
+        r = json.loads(self.p.run("lines", {"sport": "basketball_nba", "day": "yesterday"}, f))
+        self.assertFalse(r["success"])
+        self.assertIn("day must be today or tomorrow", r["error"])
+        self.assertEqual(f.urls, [])
+
+    def test_scores_today_includes_live_game_only(self):
+        r = self.call("scores", {"sport": "basketball_nba", "day": "today"}, self.scores_with(
+            ("Boston Celtics", "Los Angeles Lakers", "2026-11-07T14:00:00Z", False,
+             [{"name": "Boston Celtics", "score": "50"}, {"name": "Los Angeles Lakers", "score": "48"}]),
+            ("Utah Jazz", "Denver Nuggets", "2026-11-06T02:00:00Z", True,
+             [{"name": "Utah Jazz", "score": "99"}, {"name": "Denver Nuggets", "score": "101"}])))
+        self.assertIn("Boston Celtics 50, Los Angeles Lakers 48 (live)", r["reply"])
+        self.assertNotIn("Utah Jazz", r["reply"])
+
+    def test_scores_today_none_names_next(self):
+        r = self.call("scores", {"sport": "basketball_nba", "team": "Lakers", "day": "today"}, self.scores_with(
+            ("Utah Jazz", "Los Angeles Lakers", "2026-11-10T03:00:00Z", False, None)))
+        self.assertTrue(r["reply"].startswith("No Lakers game today (Sat Nov 07). "
+                                              "Next: Utah Jazz at Los Angeles Lakers, Mon Nov 09 22:00 EST."))
+
+    def test_scores_today_asks_for_finals_from_today(self):
+        f = FakeFetch(self.scores_with())
+        json.loads(self.p.run("scores", {"sport": "basketball_nba", "day": "today"}, f))
+        self.assertIn("daysFrom=1", f.urls[0])
+        f = FakeFetch(self.scores_with())
+        json.loads(self.p.run("scores", {"sport": "basketball_nba", "day": "tomorrow"}, f))
+        self.assertNotIn("daysFrom", f.urls[0])
+        f = FakeFetch(self.scores_with())
+        json.loads(self.p.run("scores", {"sport": "basketball_nba", "day": "today", "days_from": 3}, f))
+        self.assertIn("daysFrom=3", f.urls[0])
+
+    def test_today_is_the_local_date_late_in_the_evening(self):
+        # 02:00 UTC on Nov 8 is 21:00 on Nov 7 in New York, so "today" is still Nov 7.
+        from datetime import datetime, timezone
+        self.p.now = lambda: datetime(2026, 11, 8, 2, 0, tzinfo=timezone.utc)
+        r = self.call("lines", {"sport": "basketball_nba", "team": "Lakers", "day": "today"},
+                      self.odds_with(("Boston Celtics", "Los Angeles Lakers", "2026-11-08T03:30:00Z")))
+        self.assertIn("Boston Celtics at Los Angeles Lakers, Sat Nov 07 22:30 EST", r["reply"])
+        self.assertNotIn("No Lakers game", r["reply"])
+
+    def test_next_game_is_the_soonest(self):
+        r = self.call("lines", {"sport": "basketball_nba", "team": "Lakers", "day": "today"},
+                      self.odds_with(("Utah Jazz", "Los Angeles Lakers", "2026-12-25T22:00:00Z"),
+                                     ("Boston Celtics", "Los Angeles Lakers", "2026-11-12T03:00:00Z")))
+        self.assertIn("Next: Boston Celtics at Los Angeles Lakers, Wed Nov 11 22:00 EST.", r["reply"])
+
+    def test_an_earlier_game_is_not_next(self):
+        r = self.call("scores", {"sport": "basketball_nba", "team": "Lakers", "day": "tomorrow"}, self.scores_with(
+            ("Utah Jazz", "Los Angeles Lakers", "2026-11-06T03:00:00Z", True,
+             [{"name": "Utah Jazz", "score": "99"}, {"name": "Los Angeles Lakers", "score": "101"}])))
+        self.assertTrue(r["reply"].startswith("No Lakers game tomorrow (Sun Nov 08), and none later."))
+
+    def test_schemas_offer_day(self):
+        for name in ("odds_lines", "odds_scores"):
+            prop = self.p.SCHEMAS[name]["parameters"]["properties"]["day"]
+            self.assertEqual(prop["enum"], ["today", "tomorrow"])
+
+
 class Scores(Base):
     def test_final_live_and_upcoming(self):
         raw = json.loads(fixture("scores.json"))
