@@ -1131,8 +1131,11 @@ repos, and one ended in a colon with no template after it.)
   is 22221 (Auto-Agent uses 22220). (Casey, 2026-11-07)
 - **The VM runs only when Casey starts it.** It shares the host's single GPU
   slot with Auto-Agent's 03:00 night job and hand runs, and RAM is tight with
-  `qwen` loaded. Nothing here starts it at boot, schedules it, or adds a cron
-  job. (Casey, 2026-11-07)
+  `qwen` loaded. Nothing here starts the VM at boot, schedules it, or adds a
+  cron job. Inside the VM, the gateway is a user service that starts with
+  the VM, which keeps "the bot runs only when Casey starts the VM" true.
+  (Casey, 2026-11-07. Service kept the same day, after `hermes gateway setup`
+  installed it.)
 - **The router is Local-LLM's contract, consumed here and never changed from
   here.** Host `127.0.0.1:8080`, reached from the guest at `10.0.2.2:8080`,
   model `qwen`, context 131,072. A need to change any of them is raised as a

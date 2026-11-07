@@ -1,0 +1,7 @@
+name: friends_odds
+version: "1.0"
+description: "Odds, lines and scores from The Odds API for Friends-Hermes. Research only: reads public data, never bets or logs in."
+provides_tools:
+  - odds_sports
+  - odds_lines
+  - odds_scores

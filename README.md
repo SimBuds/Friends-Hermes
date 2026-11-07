@@ -137,6 +137,7 @@ fi
 | `model.context_length`                | `131072`                  | The router's served context, stated not guessed              |
 | `skills.write_approval`               | `true`                    | Skills Hermes writes wait for approval (`/skills pending`) |
 | `auxiliary.background_review.enabled` | `false`                   | No skills or notes drafted on its own from friends' chats    |
+| `tools.tool_search.enabled`           | `off`                     | Plugin tools sit beside the web tools, not hidden behind `tool_search` (Discord step 4) |
 
 Leave `local_runtime` off: a second llama.cpp would fight the router for
 VRAM.
@@ -186,7 +187,8 @@ sudo systemctl reload ssh
 Friends talk to Hermes in your private Discord server, or by DM. The
 gateway answers only the user IDs you list, gives each friend their own
 session, and offers chats the web tools only. It runs in a terminal you
-start, never as a service. The token stays in the VM's `~/.hermes/.env`.
+installed as a user service, so it starts when the VM boots and stops when
+the VM shuts down. The token stays in the VM's `~/.hermes/.env`.
 
 Checked against the v0.23.0 source (2026-11-07):
 
@@ -238,17 +240,91 @@ shows up as a lower count. If any check is off, fix it before step 3.
 
 ### 3. Run it
 
+`hermes gateway setup` installs the service. Check it, and restart it after
+any change to config, `.env` or the plugin:
+
 ```bash
-# Runs in: inside the VM, in a terminal you keep open. Ctrl+C stops it.
-hermes gateway run
+# Runs in: inside the VM. A restart takes Discord down for about 30 s.
+systemctl --user restart hermes-gateway.service
+sleep 30
+systemctl --user is-active hermes-gateway.service    # must print active
+systemctl --user is-enabled hermes-gateway.service   # enabled: starts with the VM
+loginctl show-user hermes -p Linger                  # Linger=yes: starts at boot with no login
 ```
 
-Friends then @mention the bot in a server channel (each mention opens a
-thread), or DM it. Messages sent while it is stopped are dropped.
+To keep the bot off while the VM is up, run
+`systemctl --user stop hermes-gateway.service`. Friends @mention the bot in a
+server channel (each mention opens a thread), or DM it. Messages sent while
+it is stopped are dropped.
 
 To check the allowlist, send the bot a DM and an @mention from an account
 that is not on the list. Both must get no reply, and the gateway log must
 show `Unauthorized user`.
+
+### 4. Add the odds tools
+
+The `friends_odds` plugin gives Discord chats three tools: `odds_sports`,
+`odds_lines` and `odds_scores` (see [Tools](#tools)). Register a free key at
+[The Odds API](https://the-odds-api.com) first. Signing up is yours to do.
+
+Copy the plugin and the collector into the VM:
+
+```bash
+# Runs in: local terminal, host, in this repo, with the VM running. Safe to run twice: scp overwrites.
+ssh -p 22221 hermes@localhost 'mkdir -p ~/.hermes/plugins/friends_odds'
+scp -P 22221 hermes-plugin/friends_odds/plugin.yaml hermes-plugin/friends_odds/__init__.py \
+  tools/odds_collect.py hermes@localhost:.hermes/plugins/friends_odds/
+ssh -p 22221 hermes@localhost 'ls ~/.hermes/plugins/friends_odds'   # must list __init__.py odds_collect.py plugin.yaml
+```
+
+Add the key and settings to `.env`. The key is typed at a hidden prompt, so
+it never appears in a command line or the shell history:
+
+```bash
+# Runs in: inside the VM. Safe to run twice: each line is skipped when its key exists.
+ENVF=~/.hermes/.env
+if grep -q '^ODDS_API_KEY=' "$ENVF"; then echo "skip: ODDS_API_KEY already set"; else
+  read -rs -p 'The Odds API key: ' K; echo
+  case "$K" in ''|*[!A-Za-z0-9]*) echo "STOP: that is not a key (letters and digits only). Nothing changed." ;;
+    *) printf 'ODDS_API_KEY=%s\n' "$K" >> "$ENVF" && echo "added ODDS_API_KEY (${#K} characters)" ;; esac
+  unset K
+fi
+CONTACT='you@example.invalid'   # EDIT: your contact address, for the User-Agent
+TZNAME='America/New_York'       # EDIT: the time zone answers show times in
+grep -q '^FH_CONTACT=' "$ENVF" && echo "skip: FH_CONTACT already set" || { printf 'FH_CONTACT=%s\n' "$CONTACT" >> "$ENVF"; echo "added FH_CONTACT"; }
+grep -q '^FH_TIMEZONE=' "$ENVF" && echo "skip: FH_TIMEZONE already set" || { printf 'FH_TIMEZONE=%s\n' "$TZNAME" >> "$ENVF"; echo "added FH_TIMEZONE"; }
+grep -c '^ODDS_API_KEY=' "$ENVF"                           # must print 1 (a count, never the key)
+grep -E '^(FH_CONTACT|FH_TIMEZONE)=' "$ENVF"               # must show your two values
+```
+
+Enable the plugin and give Discord its toolset:
+
+```bash
+# Runs in: inside the VM. Safe to run twice.
+hermes plugins enable friends_odds
+hermes config set platform_toolsets.discord "[web, friends_odds]"
+hermes config set tools.tool_search.enabled off
+grep -n -A1 '^  discord:' ~/.hermes/config.yaml           # must show [web, friends_odds]
+grep -n -A1 '^  tool_search:' ~/.hermes/config.yaml       # the line after must show enabled: off
+hermes tools list --platform discord                      # enabled: web and friends_odds only
+```
+
+Tool search is turned off because v0.23.0 hides plugin tools behind
+`tool_search` and `tool_call` by default. With it on, the model answered an
+odds question from web search and never found `odds_lines` (seen
+2026-11-07). With it off, a new Discord chat lists exactly `odds_lines`,
+`odds_scores`, `odds_sports`, `web_extract` and `web_search`.
+
+Check it in a local session before friends use it. The sports list costs
+no credits:
+
+```text
+Use the odds_sports tool and reply with its reply text.
+```
+
+It must list in-season sports, end with the source, a fetch time and
+"Information only, not betting advice.", and print no key. Then restart
+the gateway service (step 3), so Discord sessions load the plugin.
 
 ## Tools
 
@@ -274,20 +350,37 @@ python3 odds_collect.py scores basketball_nba 3             # with the last 3 da
 python3 odds_collect.py odds basketball_nba --fresh         # refetch if the cached answer is 10 minutes old or more
 ```
 
-| Setting              | Default                     | What it does                                                                             |
-| -------------------- | --------------------------- | ---------------------------------------------------------------------------------------- |
-| `ODDS_API_KEY`     | none, required              | Your key, in `~/.hermes/.env` only                                                     |
-| `FH_CONTACT`       | none, required              | Contact address in the User-Agent                                                        |
-| `FH_CACHE_DIR`     | `~/.cache/friends-hermes` | Cache and the last known quota, under `odds/`                                          |
-| `ODDS_CACHE_TTL`   | `21600` (6 hours)         | Seconds a response is reused                                                             |
-| `ODDS_FRESH_MIN_AGE`| `600` (10 minutes)        | A fresh request refetches only a cached answer at least this old                         |
-| `ODDS_QUOTA_FLOOR` | `25`                      | Paid calls stop when fewer credits remain. Cached answers and the sports list still work |
+| Setting                | Default                     | What it does                                                                             |
+| ---------------------- | --------------------------- | ---------------------------------------------------------------------------------------- |
+| `ODDS_API_KEY`       | none, required              | Your key, in `~/.hermes/.env` only                                                     |
+| `FH_CONTACT`         | none, required              | Contact address in the User-Agent                                                        |
+| `FH_CACHE_DIR`       | `~/.cache/friends-hermes` | Cache and the last known quota, under `odds/`                                          |
+| `ODDS_CACHE_TTL`     | `21600` (6 hours)         | Seconds a response is reused                                                             |
+| `ODDS_FRESH_MIN_AGE` | `600` (10 minutes)        | A fresh request refetches only a cached answer at least this old                         |
+| `ODDS_QUOTA_FLOOR`   | `25`                      | Paid calls stop when fewer credits remain. Cached answers and the sports list still work |
 
 Exit codes: 0 ok, 1 a missing or refused key or contact, 2 bad input (sport,
 market, region, days), 3 the API failed or the quota floor was reached.
 
 The key is sent as the `apiKey` query parameter, as the API requires, and
 is stripped from every log line, cache file name and error.
+
+### Odds tools in Discord
+
+The `friends_odds` plugin (`hermes-plugin/friends_odds/`) wraps the
+collector for chats. Its code, not the model, writes every number, the
+source, the fetch time, "cached" when the answer was reused, and the line
+"Information only, not betting advice." The model is told to quote that
+text as given.
+
+- `odds_sports`: in-season sports and their keys. Free.
+- `odds_lines`: with no team, the list of games for a sport. With a team,
+  every US book's moneyline, spread and total for that team's games. A
+  game list is followed by a team question at no cost, since the pull is
+  cached.
+- `odds_scores`: live and upcoming games, and finals up to 3 days back.
+
+`FH_TIMEZONE` (default `UTC`) sets the time zone of the times shown.
 
 ## Tests
 
@@ -296,5 +389,6 @@ Odds API's v4 guide, saved in `tools/fixtures/odds/`.
 
 ```bash
 # Runs in: local terminal, host, in this repo. Must end with failed=0 and exit 0.
-python3 tools/test_odds_collect.py    # passed=33
+python3 tools/test_odds_collect.py       # passed=33
+python3 hermes-plugin/test_friends_odds.py  # passed=20
 ```

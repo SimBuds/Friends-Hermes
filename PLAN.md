@@ -28,6 +28,9 @@ All made by Casey on 2026-11-07 unless noted.
 - **Started by hand only.** Reason: the host has one GPU slot, shared with
   Auto-Agent's 03:00 night job and hand runs, and the router serves one
   model at a time. Friends' messages sent while the VM is off are dropped.
+  Casey boots the VM by hand, and the gateway runs inside it as a user
+  service that starts with the VM (kept 2026-11-07, after
+  `hermes gateway setup` installed it).
 - **v1 scope:** odds and lines across books, plus scores, schedules, and
   stats. Finance is out.
 - **Odds from [The Odds API](https://the-odds-api.com), free Starter plan.**
@@ -107,12 +110,24 @@ secrets.
 | This repo | Docs, collectors, plugin, tests | Kept | Kept | Kept |
 | `~/.hermes/.env` in the VM | Discord token, friends' IDs, API keys | Kept | Rolled back | Lost. Casey enters them again |
 | `~/.hermes/config.yaml` in the VM | Model, toolsets, Discord keys | Kept | Rolled back | Lost. The README blocks re-apply them |
-| `~/.hermes/plugins/` in the VM | The plugin, copied from this repo | Kept | Rolled back | Lost. Copied again from the repo |
-| Collector cache in the VM | Raw API responses | Kept | Rolled back | Lost, by design |
+| `~/.hermes/plugins/friends_odds/` in the VM | The plugin and a copy of `tools/odds_collect.py`, copied from this repo | Kept | Rolled back | Lost. Copied again from the repo |
+| Collector cache in the VM (`~/.cache/friends-hermes/odds/`) | Raw API responses and the last known quota | Kept | Rolled back | Lost, by design |
+| `~/.config/systemd/user/` and `/var/lib/systemd/linger/hermes` in the VM | The gateway's user service and its start at boot | Kept | Rolled back | Lost. `hermes gateway setup` installs it again |
 | VM snapshots in `~/VMs/friends-hermes` | `clean` (fresh install) and `hermes-configured` (Hermes v0.23.0, base config, SSH keys only), both 2026-11-07 | Kept | Kept | Lost with the disk image |
 
 The token, friends' IDs, and keys have no copy in this repo by design. A
 change made by hand in the VM is copied here in the same phase.
+
+## Findings
+
+- **Tool search hid the odds tools** (2026-11-07). Hermes v0.23.0 defaults
+  `tools.tool_search.enabled` to `auto`, which moves plugin tools behind
+  `tool_search`, `tool_describe` and `tool_call`. A Discord odds question was
+  answered from web search, with made-up trends and a "prop lean" and no
+  citation, and `odds_lines` was never called (no cache file, 500 credits
+  untouched). The source shows `tool_call` refuses tools outside the
+  session's list, so it was not a way past the toolset. Turned off, and
+  the session lists the five tools directly.
 
 ## Open questions
 
