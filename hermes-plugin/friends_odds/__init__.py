@@ -7,6 +7,7 @@ has to quote the `reply` text, never compose a number.
 """
 import json
 import os
+import threading
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -22,6 +23,14 @@ DAYS = {"today": 0, "tomorrow": 1}
 
 def now():
     return datetime.now(timezone.utc)
+
+
+ODDS_TOOLS = ("odds_sports", "odds_lines", "odds_scores")
+ERROR_PREFIX = "Could not get that from The Odds API: "
+# Tool replies seen this turn, keyed by turn_id: post_tool_call fills it and
+# transform_llm_output empties it. Both hooks receive turn_id in v0.23.0.
+_replies = {}
+_replies_lock = threading.Lock()
 
 
 # Book order follows the API's response. Totals outcomes are Over and Under.
@@ -219,9 +228,44 @@ SCHEMAS = {
 }
 
 
+def remember_reply(tool_name="", result="", turn_id="", **kwargs):
+    """post_tool_call: keep each odds tool's code-written text for this turn's final reply."""
+    del kwargs
+    if tool_name not in ODDS_TOOLS or not turn_id:
+        return
+    try:
+        data = json.loads(result)
+        text = data["reply"] if data.get("success") else ERROR_PREFIX + str(data.get("error", "unknown error"))
+    except (ValueError, TypeError, AttributeError, KeyError):
+        text = ERROR_PREFIX + "the tool returned an unreadable result."
+    with _replies_lock:
+        _replies.setdefault(turn_id, []).append((tool_name, text))
+
+
+def final_reply(response_text="", platform="", turn_id="", **kwargs):
+    """transform_llm_output: on Discord, after an odds tool the reply is the tool's text exactly.
+    Any other Discord reply gets the not-advice line. None leaves the reply unchanged."""
+    del kwargs
+    with _replies_lock:
+        seen = _replies.pop(turn_id, [])
+    if platform != "discord" or not response_text:
+        return None
+    if seen:
+        # odds_sports is a lookup step when a lines or scores call follows it.
+        shown = [t for name, t in seen if name != "odds_sports"] or [t for _, t in seen]
+        texts = [t if not t.startswith(ERROR_PREFIX) else f"{t}\n{NOT_ADVICE}" for t in shown]
+        return "\n\n".join(texts)
+    if response_text.rstrip().endswith(NOT_ADVICE):
+        return None
+    return f"{response_text.rstrip()}\n\n{NOT_ADVICE}"
+
+
 def register(ctx):
     for name, kind in (("odds_sports", "sports"), ("odds_lines", "lines"), ("odds_scores", "scores")):
         def handler(params, _kind=kind, **kwargs):
             del kwargs
             return run(_kind, params or {})
         ctx.register_tool(name=name, toolset=TOOLSET, schema=SCHEMAS[name], handler=handler)
+    ctx.register_hook("post_tool_call", remember_reply)
+    # hold_stream: Discord shows nothing until the rewrite, and a failed hook withholds the reply.
+    ctx.register_hook("transform_llm_output", final_reply, hold_stream=True)

@@ -59,9 +59,13 @@ def ok(name, remaining="470"):
 class FakeCtx:
     def __init__(self):
         self.tools = {}
+        self.hooks = {}
 
     def register_tool(self, name, toolset, schema, handler, **kw):
         self.tools[name] = (toolset, schema, handler)
+
+    def register_hook(self, name, callback, **kw):
+        self.hooks[name] = (callback, kw)
 
 
 class Base(unittest.TestCase):
@@ -110,6 +114,104 @@ class Register(Base):
         for name in ("odds_sports", "odds_lines", "odds_scores"):
             ctx.tools[name][2]({"sport": "basketball_nba"}, task_id="t")
         self.assertEqual(seen, ["sports", "lines", "scores"])
+
+
+class Reply(Base):
+    """The reply friends see in Discord is written by code (Phase 7, option A)."""
+
+    def lines_result(self, team="Dallas"):
+        return self.p.run("lines", {"sport": "americanfootball_nfl", "team": team}, FakeFetch(ok("odds.json")))
+
+    def sports_result(self):
+        return self.p.run("sports", {}, FakeFetch(ok("sports.json")))
+
+    def scores_result(self):
+        return self.p.run("scores", {"sport": "basketball_nba", "team": "Kings"}, FakeFetch(ok("scores.json")))
+
+    def remember(self, tool, result, turn="t1"):
+        self.p.remember_reply(tool_name=tool, args={}, result=result, task_id="x", session_id="s",
+                              tool_call_id="c", turn_id=turn, duration_ms=5)
+
+    def final(self, text, turn="t1", platform="discord"):
+        return self.p.final_reply(response_text=text, session_id="s", model="qwen", platform=platform, turn_id=turn)
+
+    def test_register_adds_both_hooks_and_holds_the_stream(self):
+        ctx = FakeCtx()
+        self.p.register(ctx)
+        self.assertIs(ctx.hooks["post_tool_call"][0], self.p.remember_reply)
+        callback, kw = ctx.hooks["transform_llm_output"]
+        self.assertIs(callback, self.p.final_reply)
+        self.assertEqual(kw, {"hold_stream": True})
+
+    def test_one_odds_tool_reply_is_the_tool_text_exactly(self):
+        result = self.lines_result()
+        self.remember("odds_lines", result)
+        out = self.final("Lakers -150, take the over, trust me")
+        self.assertEqual(out, json.loads(result)["reply"])
+
+    def test_two_odds_tools_in_call_order(self):
+        lines, scores = self.lines_result(), self.scores_result()
+        self.remember("odds_lines", lines)
+        self.remember("odds_scores", scores)
+        out = self.final("model text")
+        self.assertEqual(out, json.loads(lines)["reply"] + "\n\n" + json.loads(scores)["reply"])
+
+    def test_sports_lookup_before_lines_is_dropped(self):
+        lines = self.lines_result()
+        self.remember("odds_sports", self.sports_result())
+        self.remember("odds_lines", lines)
+        self.assertEqual(self.final("model text"), json.loads(lines)["reply"])
+
+    def test_sports_alone_is_shown(self):
+        sports = self.sports_result()
+        self.remember("odds_sports", sports)
+        self.assertEqual(self.final("model text"), json.loads(sports)["reply"])
+
+    def test_tool_error_is_shown_plainly_never_the_model_guess(self):
+        err = self.p.run("lines", {"sport": "NBA!"}, FakeFetch())
+        self.remember("odds_lines", err)
+        out = self.final("Probably Lakers -3, books are slow today")
+        self.assertNotIn("Lakers -3", out)
+        self.assertIn("not a sport key", out)
+        self.assertTrue(out.startswith("Could not get that from The Odds API: "))
+        self.assertTrue(out.endswith("Information only, not betting advice."))
+
+    def test_no_odds_tool_adds_the_not_advice_line(self):
+        self.assertEqual(self.final("The Lakers play in LA."),
+                         "The Lakers play in LA.\n\nInformation only, not betting advice.")
+
+    def test_line_already_there_is_not_added_twice(self):
+        text = "Some text.\n\nInformation only, not betting advice."
+        self.assertIsNone(self.final(text))
+
+    def test_other_platforms_are_unchanged(self):
+        self.remember("odds_lines", self.lines_result(), turn="t9")
+        for platform in ("cli", "telegram", ""):
+            self.assertIsNone(self.final("model text", turn="t9", platform=platform))
+
+    def test_empty_reply_is_unchanged(self):
+        self.assertIsNone(self.final(""))
+
+    def test_web_search_is_ignored(self):
+        self.remember("web_search", json.dumps({"results": ["Lakers -3"]}))
+        self.assertEqual(self.final("answer"), "answer\n\nInformation only, not betting advice.")
+
+    def test_turns_do_not_leak(self):
+        self.remember("odds_lines", self.lines_result(), turn="t1")
+        out = self.final("other answer", turn="t2")
+        self.assertEqual(out, "other answer\n\nInformation only, not betting advice.")
+
+    def test_entry_is_removed_after_use(self):
+        result = self.lines_result()
+        self.remember("odds_lines", result)
+        self.assertEqual(self.final("x"), json.loads(result)["reply"])
+        self.assertEqual(self.final("again"), "again\n\nInformation only, not betting advice.")
+
+    def test_unreadable_tool_result_is_treated_as_an_error(self):
+        self.remember("odds_lines", "not json")
+        out = self.final("Lakers -3")
+        self.assertNotIn("Lakers -3", out)
+        self.assertTrue(out.startswith("Could not get that from The Odds API: "))
 
 
 class Lines(Base):

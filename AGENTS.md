@@ -1131,16 +1131,20 @@ repos, and one ended in a colon with no template after it.)
   is 22221 (Auto-Agent uses 22220). (Casey, 2026-11-07)
 - **The VM runs only when Casey starts it.** It shares the host's single GPU
   slot with Auto-Agent's 03:00 night job and hand runs, and RAM is tight with
-  `qwen` loaded. Nothing here starts the VM at boot, schedules it, or adds a
+  a 35B model loaded. Nothing here starts the VM at boot, schedules it, or adds a
   cron job. Inside the VM, the gateway is a user service that starts with
   the VM, which keeps "the bot runs only when Casey starts the VM" true.
   (Casey, 2026-11-07. Service kept the same day, after `hermes gateway setup`
   installed it.)
 - **The router is Local-LLM's contract, consumed here and never changed from
   here.** Host `127.0.0.1:8080`, reached from the guest at `10.0.2.2:8080`,
-  model `qwen`, context 131,072. A need to change any of them is raised as a
-  Local-LLM change. Hermes's `model.context_length` follows the router's
-  served value. (Casey, 2026-11-07)
+  model `freedom`, context 131,072. A need to change any of them is raised as
+  a Local-LLM change. Hermes's `model.context_length` follows the router's
+  served value. `freedom` is the router's uncensored Qwen 3.6 35B, chosen
+  because Casey wants an unfiltered bot. It does not refuse, so the hard
+  limits above are held by the tools and the plugin's code, never by the
+  model. (Casey, 2026-11-07. Model `qwen` until Casey switched this VM to
+  `freedom` on 2026-11-09.)
 - **Environment labels for handed commands are `local terminal, host` and
   `inside the VM`.** A correct command on the wrong side of the VM boundary
   either fails or changes the host. (Casey, 2026-11-07)

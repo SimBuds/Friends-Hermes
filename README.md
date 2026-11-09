@@ -6,7 +6,8 @@ research assistant: odds and lines across books, scores, and schedules
 (stats are not in v1). It does not bet, and every number comes from a documented API with
 its source and fetch time. Information, not betting advice.
 
-It uses the Local-LLM router on the host (`qwen`, context 131,072) and runs
+It uses the Local-LLM router on the host (`freedom`, an uncensored Qwen 3.6
+35B, context 131,072) and runs
 only when started by hand.
 
 [`PLAN.md`](PLAN.md) holds the why. [`AGENTS.md`](AGENTS.md) holds the rules
@@ -25,7 +26,7 @@ own folder because Auto-Agent's VM already uses the name
 # Runs in: local terminal, host. Read-only.
 quickemu --version                        # 4.9.9 was used to write this guide
 curl -s http://127.0.0.1:8080/health      # must print {"status":"ok"}
-free -g                                   # "available" must leave room for a 4 GB VM next to qwen
+free -g                                   # "available" must leave room for a 4 GB VM next to the model
 ss -ltn | grep ':22221 '                  # must print nothing: the port is free
 ```
 
@@ -66,7 +67,7 @@ Boot the VM (see [Connecting](#connecting)), log in, then:
 # Runs in: inside the VM.
 sudo apt update && sudo apt install -y curl git
 curl -s http://10.0.2.2:8080/health                               # must print {"status":"ok"}
-curl -s http://10.0.2.2:8080/v1/models | grep -o '"id":"[a-z]*"'  # must list "qwen"
+curl -s http://10.0.2.2:8080/v1/models | grep -o '"id":"[a-z]*"'  # must list "freedom"
 ```
 
 `10.0.2.2` is QEMU's address for the host's loopback. If the first `curl`
@@ -92,7 +93,7 @@ hermes --version              # this guide was written for v0.23.0
 # Runs in: inside the VM. Safe to re-run: each line overwrites the same key.
 hermes config set model.provider custom
 hermes config set model.base_url http://10.0.2.2:8080/v1
-hermes config set model.default qwen
+hermes config set model.default freedom
 hermes config set model.api_key local
 hermes config set model.context_length 131072
 hermes config set skills.write_approval true
@@ -132,7 +133,7 @@ fi
 | --------------------------------------- | --------------------------- | ------------------------------------------------------------ |
 | `model.provider`                      | `custom`                  | Any OpenAI-compatible server                                 |
 | `model.base_url`                      | `http://10.0.2.2:8080/v1` | The host's router, through QEMU's address for the host       |
-| `model.default`                       | `qwen`                    | One pinned model, so the router never swaps                  |
+| `model.default`                       | `freedom`                  | One pinned model: the uncensored Qwen 3.6 35B (Casey, 2026-11-09)|
 | `model.api_key`                       | `local`                   | A placeholder: the router has no auth                        |
 | `model.context_length`                | `131072`                  | The router's served context, stated not guessed              |
 | `skills.write_approval`               | `true`                    | Skills Hermes writes wait for approval (`/skills pending`) |
@@ -152,7 +153,9 @@ rm -ri ~/VMs/friends-hermes
 ## Connecting
 
 Start the VM in its own terminal and leave it open. Shut Auto-Agent's VM
-down first: both together with `qwen` loaded push the host into swap.
+down first: both together with a 35B model loaded push the host into swap.
+Auto-Agent uses `qwen` and this VM `freedom`, and the router holds one model
+at a time, so alternating between them swaps models each time.
 
 ```bash
 # Runs in: local terminal, host, in ~/VMs/friends-hermes.
@@ -370,8 +373,20 @@ is stripped from every log line, cache file name and error.
 The `friends_odds` plugin (`hermes-plugin/friends_odds/`) wraps the
 collector for chats. Its code, not the model, writes every number, the
 source, the fetch time, "cached" when the answer was reused, and the line
-"Information only, not betting advice." The model is told to quote that
-text as given.
+"Information only, not betting advice."
+
+The plugin also decides what a friend sees in Discord, in code:
+
+- When an odds tool ran in a turn, the reply is that tool's text exactly.
+  Whatever the model wrote is dropped. A sports-list lookup before a lines
+  or scores call is left out. A tool error is shown plainly with the
+  not-advice line, never the model's guess.
+- Any other Discord reply gets "Information only, not betting advice."
+  added at the end, unless it already ends with it.
+- While a reply is being made, Discord shows only the typing indicator
+  (`hold_stream`). If the plugin's hook fails, Hermes sends a short "reply
+  withheld" notice, never the unchecked text.
+- Other platforms, the local CLI included, are unchanged.
 
 - `odds_sports`: in-season sports and their keys. Free.
 - `odds_lines`: with no team, the list of games for a sport. With a team,
@@ -395,5 +410,5 @@ Odds API's v4 guide, saved in `tools/fixtures/odds/`.
 ```bash
 # Runs in: local terminal, host, in this repo. Must end with failed=0 and exit 0.
 python3 tools/test_odds_collect.py       # passed=33
-python3 hermes-plugin/test_friends_odds.py  # passed=35
+python3 hermes-plugin/test_friends_odds.py  # passed=49
 ```

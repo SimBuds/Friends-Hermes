@@ -68,6 +68,13 @@ All made by Casey on 2026-11-07 unless noted.
 - **No per-friend rate limit in v1.** The allowlist and starting by hand
   bound use. A `pre_gateway_dispatch` hook is the route if it is needed.
 - **VM: 4 GB RAM, 2 cores, 20 GB disk.** See the budget below.
+- **Model `freedom`** (Casey, 2026-11-09, was `qwen`): the router's
+  uncensored Qwen 3.6 35B, because Casey wants an unfiltered bot. Same
+  context (131,072) and about the same size as `qwen` (21 GB GGUF). It does
+  not refuse, so research-only is held by the tools (none can bet, log in,
+  or move money) and by the plugin's reply hook, never by the model. Its
+  tool calling is not in Local-LLM's tool-calling results. Auto-Agent stays
+  on `qwen`, so the router swaps models when both VMs are used in turn.
 
 Rejected sources: odds-api.io (new free keys paused, free tier for
 development only), ESPN's endpoints (undocumented), balldontlie (free covers
@@ -79,7 +86,7 @@ next-day delayed).
 1. A friend asks in the Discord server or by DM. The gateway answers only
    allowlisted user IDs, and keeps each friend's session separate
    (`group_sessions_per_user`, on by default).
-2. Hermes (`qwen`) picks an odds tool and its arguments.
+2. Hermes (`freedom`) picks an odds tool and its arguments.
 3. The plugin calls the collector, which fetches the API (cached, rate
    limited per host, backoff on 429 and 5xx) and returns plain data with
    `source` and `fetched_at`.
@@ -106,7 +113,7 @@ Friends' messages, and any web page the web tool reads, are untrusted.
 The host has 31 GiB of RAM and 24 threads. With `qwen` loaded the router
 holds about 19.1 GiB (measured in Auto-Agent, 2026-09-26), and Auto-Agent's
 VM takes 6 GB. This VM's tools run no commands, so it needs little: 4 GB and
-2 cores. Running both VMs while `qwen` is loaded pushes the host into swap,
+2 cores. Running both VMs while a 35B model is loaded pushes the host into swap,
 so run one at a time. Each new Discord session starts by sending Hermes's
 system prompt and tool definitions, which is smaller here than Auto-Agent's
 15.6K tokens because the toolset is small. Measure it in the gateway phase.
@@ -130,6 +137,17 @@ The token, friends' IDs, and keys have no copy in this repo by design. A
 change made by hand in the VM is copied here in the same phase.
 
 ## Findings
+
+- **The model rewrote the plugin's text** (2026-11-07, twice). The sports
+  list came back reformatted, and "Lakers lines tonight" came back
+  paraphrased with the source, fetch time and not-advice line dropped and
+  a claim of its own added. Telling the model to quote, in the tool
+  descriptions, did not hold. Fixed in code (Casey, option A): the plugin's
+  `post_tool_call` hook keeps each odds tool's text by `turn_id`, and its
+  `transform_llm_output` hook, registered with `hold_stream=True`, makes
+  the Discord reply that text exactly. Every other Discord reply gets the
+  not-advice line. Both hooks receive `turn_id` in v0.23.0
+  (`model_tools._CallIds`, `agent/turn_finalizer.py`).
 
 - **Tool search hid the odds tools** (2026-11-07). Hermes v0.23.0 defaults
   `tools.tool_search.enabled` to `auto`, which moves plugin tools behind
