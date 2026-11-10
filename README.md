@@ -261,8 +261,12 @@ server channel (each mention opens a thread), or DM it. Messages sent while
 it is stopped are dropped.
 
 To check the allowlist, send the bot a DM and an @mention from an account
-that is not on the list. Both must get no reply, and the gateway log must
-show `Unauthorized user`.
+that is not on the list, with the gateway `active`. Both must get no reply
+and no pairing code, and `hermes pairing list` must show no approved users.
+The Discord adapter drops a message from someone not on the list without
+logging it, so the log stays quiet. Taking your own ID off the list for the
+test works: back up `~/.hermes/.env`, remove the ID, restart the service,
+test, then restore the backup and restart again (done 2026-11-10).
 
 ### 4. Add the odds tools
 
