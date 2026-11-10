@@ -4,7 +4,7 @@
 answering a few friends in a private Discord server as a sports-betting
 research assistant: odds and lines across books, scores, and schedules
 (stats are not in v1). It does not bet, and every number comes from a documented API with
-its source and fetch time. Information, not betting advice.
+its source and fetch time.
 
 It uses the Local-LLM router on the host (`freedom`, an uncensored Qwen 3.6
 35B, context 131,072) and runs
@@ -325,8 +325,8 @@ no credits:
 Use the odds_sports tool and reply with its reply text.
 ```
 
-It must list in-season sports, end with the source, a fetch time and
-"Information only, not betting advice.", and print no key. Then restart
+It must list in-season sports, end with the source and a fetch time, and
+print no key. Then restart
 the gateway service (step 3), so Discord sessions load the plugin.
 
 ## Tools
@@ -372,17 +372,15 @@ is stripped from every log line, cache file name and error.
 
 The `friends_odds` plugin (`hermes-plugin/friends_odds/`) wraps the
 collector for chats. Its code, not the model, writes every number, the
-source, the fetch time, "cached" when the answer was reused, and the line
-"Information only, not betting advice."
+source, the fetch time, and "cached" when the answer was reused.
 
 The plugin also decides what a friend sees in Discord, in code:
 
 - When an odds tool ran in a turn, the reply is that tool's text exactly.
   Whatever the model wrote is dropped. A sports-list lookup before a lines
-  or scores call is left out. A tool error is shown plainly with the
-  not-advice line, never the model's guess.
-- Any other Discord reply gets "Information only, not betting advice."
-  added at the end, unless it already ends with it.
+  or scores call is left out. A tool error is shown plainly, never the
+  model's guess.
+- Any other Discord reply is left as the model wrote it.
 - While a reply is being made, Discord shows only the typing indicator
   (`hold_stream`). If the plugin's hook fails, Hermes sends a short "reply
   withheld" notice, never the unchecked text.

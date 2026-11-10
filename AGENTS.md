@@ -1105,10 +1105,10 @@ repos, and one ended in a colon with no template after it.)
 - **Numbers come from documented APIs fetched by a script, never from the
   model.** Odds, lines, scores, and stats in an answer are copied from a
   collector's output. The answer cites the source and the time it was
-  fetched, and carries a one-line note that it is information, not betting
-  advice. That citation and note are written by code, not by the model.
-  Each API's terms and `robots.txt` are respected per *Fetching from the
-  web*. (Casey, 2026-11-07)
+  fetched. That citation is written by code, not by the model. Each API's
+  terms and `robots.txt` are respected per *Fetching from the web*. (Casey,
+  2026-11-07. The one-line "Information only, not betting advice." note was
+  removed from every reply on 2026-11-10, Casey.)
 - **API keys are Casey's and live only in the VM's `~/.hermes/.env`.** Casey
   registers every account and key. No key appears in this repo, a test
   fixture, a log, or a command line. Captured fixtures are scrubbed of keys

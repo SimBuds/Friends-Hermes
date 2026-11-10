@@ -94,6 +94,11 @@ class Base(unittest.TestCase):
     def call(self, kind, params, *answers):
         return json.loads(self.p.run(kind, params, FakeFetch(*answers)))
 
+    def assert_cited(self, text):
+        """Ends with the code-written source and fetch time, and carries no advice line."""
+        self.assertRegex(text, r"Source: The Odds API \(the-odds-api\.com\), fetched [^\n]+\.$")
+        self.assertNotIn("advice", text.lower())
+
 
 class Register(Base):
     def test_three_tools_in_one_toolset_with_schemas(self):
@@ -174,15 +179,6 @@ class Reply(Base):
         self.assertNotIn("Lakers -3", out)
         self.assertIn("not a sport key", out)
         self.assertTrue(out.startswith("Could not get that from The Odds API: "))
-        self.assertTrue(out.endswith("Information only, not betting advice."))
-
-    def test_no_odds_tool_adds_the_not_advice_line(self):
-        self.assertEqual(self.final("The Lakers play in LA."),
-                         "The Lakers play in LA.\n\nInformation only, not betting advice.")
-
-    def test_line_already_there_is_not_added_twice(self):
-        text = "Some text.\n\nInformation only, not betting advice."
-        self.assertIsNone(self.final(text))
 
     def test_other_platforms_are_unchanged(self):
         self.remember("odds_lines", self.lines_result(), turn="t9")
@@ -194,18 +190,24 @@ class Reply(Base):
 
     def test_web_search_is_ignored(self):
         self.remember("web_search", json.dumps({"results": ["Lakers -3"]}))
-        self.assertEqual(self.final("answer"), "answer\n\nInformation only, not betting advice.")
+        self.assertIsNone(self.final("answer"))
 
     def test_turns_do_not_leak(self):
         self.remember("odds_lines", self.lines_result(), turn="t1")
-        out = self.final("other answer", turn="t2")
-        self.assertEqual(out, "other answer\n\nInformation only, not betting advice.")
+        self.assertIsNone(self.final("other answer", turn="t2"))
 
     def test_entry_is_removed_after_use(self):
         result = self.lines_result()
         self.remember("odds_lines", result)
         self.assertEqual(self.final("x"), json.loads(result)["reply"])
-        self.assertEqual(self.final("again"), "again\n\nInformation only, not betting advice.")
+        self.assertIsNone(self.final("again"))
+
+    def test_no_odds_tool_leaves_the_reply_as_written(self):
+        self.assertIsNone(self.final("The Lakers play in LA."))
+
+    def test_tool_error_carries_no_advice_line(self):
+        self.remember("odds_lines", self.p.run("lines", {"sport": "NBA!"}, FakeFetch()))
+        self.assertNotIn("advice", self.final("guess").lower())
 
     def test_unreadable_tool_result_is_treated_as_an_error(self):
         self.remember("odds_lines", "not json")
@@ -225,8 +227,7 @@ class Lines(Base):
         books = json.loads(fixture("odds.json"))[0]["bookmakers"]
         for b in books:
             self.assertIn(f"  {b['title']}: ", text)
-        self.assertIn("Source: The Odds API (the-odds-api.com), fetched ", text)
-        self.assertTrue(text.endswith("Information only, not betting advice."))
+        self.assert_cited(text)
         self.assertEqual(r["credits_remaining"], 470)
 
     def test_every_price_in_the_reply_comes_from_the_api(self):
@@ -256,7 +257,7 @@ class Lines(Base):
     def test_unknown_team_says_so_and_still_cites(self):
         r = self.call("lines", {"sport": "americanfootball_nfl", "team": "Jets"}, ok("odds.json"))
         self.assertTrue(r["reply"].startswith("No americanfootball_nfl games with lines for 'Jets'."))
-        self.assertIn("not betting advice", r["reply"])
+        self.assert_cited(r["reply"])
 
     def test_zero_games(self):
         r = self.call("lines", {"sport": "americanfootball_nfl"}, (200, b"[]", {}))
@@ -340,7 +341,7 @@ class Day(Base):
         self.assertTrue(text.startswith("No Lakers game with lines today (Sat Nov 07). "
                                         "Next: Philadelphia 76ers at Los Angeles Lakers, Fri Dec 25 17:00 EST."))
         self.assertNotIn("Unibet", text)
-        self.assertTrue(text.endswith("Information only, not betting advice."))
+        self.assert_cited(text)
 
     def test_today_none_and_nothing_later(self):
         r = self.call("lines", {"sport": "basketball_nba", "team": "Lakers", "day": "today"},
@@ -448,7 +449,7 @@ class Scores(Base):
         self.assertEqual(text.count("(final)"), 9)
         self.assertEqual(text.count("(live)"), 1)
         self.assertEqual(text.count(": not started"), 3)
-        self.assertTrue(text.endswith("Information only, not betting advice."))
+        self.assert_cited(text)
 
     def test_team_filter(self):
         r = self.call("scores", {"sport": "basketball_nba", "team": "kings"}, ok("scores.json"))

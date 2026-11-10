@@ -1,9 +1,9 @@
 """Friends-Hermes odds tools: The Odds API data, formatted by code for Discord.
 
 Installed into ~/.hermes/plugins/friends_odds/ in the VM, together with a copy
-of tools/odds_collect.py (README, Discord, step 4). Every number, the source,
-the fetch time and the not-advice line are written here, so the model only
-has to quote the `reply` text, never compose a number.
+of tools/odds_collect.py (README, Discord, step 4). Every number, the source
+and the fetch time are written here, so the model only has to quote the
+`reply` text, never compose a number.
 """
 import json
 import os
@@ -14,7 +14,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from . import odds_collect as oc
 
 TOOLSET = "friends_odds"
-NOT_ADVICE = "Information only, not betting advice."
 QUOTE = ("Reply with the `reply` text exactly as given, in a code-free message. "
          "Do not change, round or add any number.")
 
@@ -70,7 +69,7 @@ def outcome(market, o):
 
 def footer(result, zone):
     cached = ", cached" if result.get("from_cache") else ""
-    return f"Source: {result['source']}, fetched {when(result['fetched_at'], zone)}{cached}. {NOT_ADVICE}"
+    return f"Source: {result['source']}, fetched {when(result['fetched_at'], zone)}{cached}."
 
 
 def matches(team, *names):
@@ -244,20 +243,15 @@ def remember_reply(tool_name="", result="", turn_id="", **kwargs):
 
 def final_reply(response_text="", platform="", turn_id="", **kwargs):
     """transform_llm_output: on Discord, after an odds tool the reply is the tool's text exactly.
-    Any other Discord reply gets the not-advice line. None leaves the reply unchanged."""
+    Any other reply is left as the model wrote it (None)."""
     del kwargs
     with _replies_lock:
         seen = _replies.pop(turn_id, [])
-    if platform != "discord" or not response_text:
+    if platform != "discord" or not response_text or not seen:
         return None
-    if seen:
-        # odds_sports is a lookup step when a lines or scores call follows it.
-        shown = [t for name, t in seen if name != "odds_sports"] or [t for _, t in seen]
-        texts = [t if not t.startswith(ERROR_PREFIX) else f"{t}\n{NOT_ADVICE}" for t in shown]
-        return "\n\n".join(texts)
-    if response_text.rstrip().endswith(NOT_ADVICE):
-        return None
-    return f"{response_text.rstrip()}\n\n{NOT_ADVICE}"
+    # odds_sports is a lookup step when a lines or scores call follows it.
+    shown = [t for name, t in seen if name != "odds_sports"] or [t for _, t in seen]
+    return "\n\n".join(shown)
 
 
 def register(ctx):

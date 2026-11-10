@@ -68,6 +68,10 @@ All made by Casey on 2026-11-07 unless noted.
 - **No per-friend rate limit in v1.** The allowlist and starting by hand
   bound use. A `pre_gateway_dispatch` hook is the route if it is needed.
 - **VM: 4 GB RAM, 2 cores, 20 GB disk.** See the budget below.
+- **No "not betting advice" line** (Casey, 2026-11-10). It was on every
+  odds reply and every other Discord reply from 2026-11-07. Removed at
+  Casey's request. Replies after an odds tool still carry the source and
+  fetch time, written by code.
 - **Model `freedom`** (Casey, 2026-11-09, was `qwen`): the router's
   uncensored Qwen 3.6 35B, because Casey wants an unfiltered bot. Same
   context (131,072) and about the same size as `qwen` (21 GB GGUF). It does
@@ -90,9 +94,9 @@ next-day delayed).
 3. The plugin calls the collector, which fetches the API (cached, rate
    limited per host, backoff on 429 and 5xx) and returns plain data with
    `source` and `fetched_at`.
-4. The plugin formats the numbers, the source, the fetch time, and the
-   not-advice line in code. The model may summarize around that block but
-   is told to quote it as given.
+4. The plugin formats the numbers, the source, and the fetch time in code,
+   and its reply hook sends that text to Discord exactly, whatever the
+   model wrote.
 
 ## Threat model
 
@@ -115,8 +119,11 @@ holds about 19.1 GiB (measured in Auto-Agent, 2026-09-26), and Auto-Agent's
 VM takes 6 GB. This VM's tools run no commands, so it needs little: 4 GB and
 2 cores. Running both VMs while a 35B model is loaded pushes the host into swap,
 so run one at a time. Each new Discord session starts by sending Hermes's
-system prompt and tool definitions, which is smaller here than Auto-Agent's
-15.6K tokens because the toolset is small. Measure it in the gateway phase.
+system prompt and tool definitions. With five tools that is about 2.7K
+tokens, against Auto-Agent's 15.6K (measured 2026-11-09 in the router log:
+a new session's first request held 2,736 tokens, of which 1,042 were new
+and the rest came from the router's cached prefix). On `freedom` that read
+in about 1 second, and replies generated at 41 to 51 tokens per second.
 
 ## Persistence split
 
@@ -145,8 +152,7 @@ change made by hand in the VM is copied here in the same phase.
   descriptions, did not hold. Fixed in code (Casey, option A): the plugin's
   `post_tool_call` hook keeps each odds tool's text by `turn_id`, and its
   `transform_llm_output` hook, registered with `hold_stream=True`, makes
-  the Discord reply that text exactly. Every other Discord reply gets the
-  not-advice line. Both hooks receive `turn_id` in v0.23.0
+  the Discord reply that text exactly. Both hooks receive `turn_id` in v0.23.0
   (`model_tools._CallIds`, `agent/turn_finalizer.py`).
 
 - **Tool search hid the odds tools** (2026-11-07). Hermes v0.23.0 defaults
@@ -163,7 +169,6 @@ change made by hand in the VM is copied here in the same phase.
 - Answered 2026-11-07: `platform_toolsets.discord` accepts the plugin's
   toolset name (`[web, friends_odds]`, confirmed with
   `hermes tools list --platform discord`).
-- System prompt size with the small toolset.
 
 ## Sources
 
