@@ -190,6 +190,61 @@ def run(kind, params, fetch=None):
                        "credits_remaining": result.get("credits_remaining")})
 
 
+# Slash commands: a friend types /odds or /scores in Discord and code answers,
+# with no model call. Hermes passes the text after the command as raw_args.
+FLAGS_DAY = ("today", "tomorrow")
+ARGS_HINT = "<sport> [team] [today|tomorrow] [fresh]"
+USAGE = {"lines": f"Usage: /odds {ARGS_HINT}", "scores": f"Usage: /scores {ARGS_HINT}"}
+
+
+def parse_args(raw):
+    """Words to {sport, team, day, fresh}. The first plain word is the sport, the rest the team."""
+    words, day, fresh = [], None, False
+    for w in (raw or "").split():
+        low = w.lower()
+        if low in FLAGS_DAY:
+            day = low
+        elif low == "fresh":
+            fresh = True
+        else:
+            words.append(w)
+    return {"sport": words[0].lower() if words else None,
+            "team": " ".join(words[1:]) or None, "day": day, "fresh": fresh}
+
+
+def resolve_sport(word, live):
+    """(key, None) or (None, message). Matches a key, then a title or a key's last part
+    (nba, NFL), then any part of a key or its group (soccer). Never guesses between several."""
+    word = word.lower()
+    for tier in (lambda s: s["key"] == word,
+                 lambda s: word in (s["title"].lower(), s["key"].rsplit("_", 1)[-1]),
+                 lambda s: word in s["key"].split("_") or word == s["group"].lower()):
+        found = [s for s in live if tier(s)]
+        if len(found) == 1:
+            return found[0]["key"], None
+        if found:
+            rows = [f"{s['key']}: {s['title']}" for s in found]
+            return None, "\n".join([f"'{word}' matches more than one sport. Use one of these keys:"] + rows)
+    return None, f"No in-season sport matches '{word}'. Send the command with no sport to list them."
+
+
+def command(kind, raw_args, fetch=None):
+    """One /odds (kind "lines") or /scores call to the reply text, the same text the tools give."""
+    a = parse_args(raw_args)
+    try:
+        cfg = oc.settings()
+        fetch = fetch or _fetch(cfg)
+        if not a["sport"]:
+            return USAGE[kind] + "\n" + format_sports(oc.sports(cfg, fetch), _zone())
+        key, msg = resolve_sport(a["sport"], oc.sports(cfg, fetch)["sports"])
+    except oc.OddsError as e:
+        return ERROR_PREFIX + str(e)
+    if msg:
+        return msg
+    data = json.loads(run(kind, {"sport": key, "team": a["team"], "day": a["day"], "fresh": a["fresh"]}, fetch))
+    return data["reply"] if data.get("success") else ERROR_PREFIX + str(data.get("error"))
+
+
 SPORT = {"type": "string", "description": "Sport key from odds_sports, such as basketball_nba or americanfootball_nfl."}
 TEAM = {"type": "string", "description": "Part of a team name, such as 'Lakers'. Leave out to list the games."}
 DAY = {"type": "string", "enum": ["today", "tomorrow"],
@@ -260,6 +315,13 @@ def register(ctx):
             del kwargs
             return run(_kind, params or {})
         ctx.register_tool(name=name, toolset=TOOLSET, schema=SCHEMAS[name], handler=handler)
+    for name, kind, what in (("odds", "lines", "Betting lines per US sportsbook"),
+                             ("scores", "scores", "Live, upcoming and recent scores")):
+        def on_command(raw_args="", _kind=kind, **kwargs):
+            del kwargs
+            return command(_kind, raw_args)
+        ctx.register_command(name, on_command, description=f"{what} from The Odds API. No AI.",
+                             args_hint=ARGS_HINT)
     ctx.register_hook("post_tool_call", remember_reply)
     # hold_stream: Discord shows nothing until the rewrite, and a failed hook withholds the reply.
     ctx.register_hook("transform_llm_output", final_reply, hold_stream=True)

@@ -60,12 +60,16 @@ class FakeCtx:
     def __init__(self):
         self.tools = {}
         self.hooks = {}
+        self.commands = {}
 
     def register_tool(self, name, toolset, schema, handler, **kw):
         self.tools[name] = (toolset, schema, handler)
 
     def register_hook(self, name, callback, **kw):
         self.hooks[name] = (callback, kw)
+
+    def register_command(self, name, handler, description="", args_hint="", **kw):
+        self.commands[name] = (handler, description, args_hint)
 
 
 class Base(unittest.TestCase):
@@ -487,6 +491,113 @@ class Errors(Base):
         good = self.p.run("lines", {"sport": "americanfootball_nfl", "team": "Dallas"}, FakeFetch(ok("odds.json")))
         bad = self.p.run("scores", {"sport": "basketball_nba"}, FakeFetch(*[(500, b"", {})] * 3))
         self.assertNotIn(KEY, good + bad + self.err.getvalue())
+
+
+class Commands(Base):
+    """/odds and /scores: typed by a friend in Discord, answered by code with no model call (Phase 3)."""
+
+    def sports(self):
+        return json.loads(fixture("sports.json"))
+
+    def cmd(self, kind, raw, *answers):
+        return self.p.command(kind, raw, FakeFetch(*answers))
+
+    def test_register_adds_odds_and_scores_with_an_args_hint(self):
+        ctx = FakeCtx()
+        self.p.register(ctx)
+        self.assertEqual(sorted(ctx.commands), ["odds", "scores"])
+        for name, (handler, desc, hint) in ctx.commands.items():
+            self.assertIn("sport", hint)
+            self.assertTrue(desc)
+
+    def test_command_handlers_route_to_their_kind_and_take_hermes_context(self):
+        ctx = FakeCtx()
+        self.p.register(ctx)
+        seen = []
+        self.p.command = lambda kind, raw, fetch=None: seen.append((kind, raw)) or "text"
+        out = ctx.commands["odds"][0]("nba lakers", source=object(), session_id="s", platform="discord")
+        ctx.commands["scores"][0]("nfl")
+        self.assertEqual(out, "text")
+        self.assertEqual(seen, [("lines", "nba lakers"), ("scores", "nfl")])
+
+    def test_parse_args_words_flags_in_any_position(self):
+        a = self.p.parse_args("today nba Los Angeles fresh Lakers")
+        self.assertEqual(a, {"sport": "nba", "team": "Los Angeles Lakers", "day": "today", "fresh": True})
+        self.assertEqual(self.p.parse_args("NFL TOMORROW"),
+                         {"sport": "nfl", "team": None, "day": "tomorrow", "fresh": False})
+        self.assertEqual(self.p.parse_args("   "), {"sport": None, "team": None, "day": None, "fresh": False})
+        self.assertEqual(self.p.parse_args(None)["sport"], None)
+
+    def test_resolve_sport_by_key_title_or_last_part(self):
+        live = [{"key": s["key"], "title": s["title"], "group": s["group"]} for s in self.sports()]
+        for word, key in (("basketball_nba", "basketball_nba"), ("nba", "basketball_nba"),
+                          ("nfl", "americanfootball_nfl"), ("mls", "soccer_usa_mls"), ("NHL", "icehockey_nhl")):
+            self.assertEqual(self.p.resolve_sport(word, live), (key, None), word)
+
+    def test_resolve_sport_ambiguous_lists_matches(self):
+        live = [{"key": s["key"], "title": s["title"], "group": s["group"]} for s in self.sports()]
+        key, msg = self.p.resolve_sport("soccer", live)
+        self.assertIsNone(key)
+        self.assertIn("more than one sport", msg)
+        self.assertIn("soccer_usa_mls", msg)
+        self.assertNotIn("basketball_nba", msg)
+
+    def test_resolve_sport_unknown(self):
+        live = [{"key": s["key"], "title": s["title"], "group": s["group"]} for s in self.sports()]
+        key, msg = self.p.resolve_sport("curling", live)
+        self.assertIsNone(key)
+        self.assertIn("No in-season sport matches 'curling'", msg)
+
+    def test_odds_matches_the_tool_text(self):
+        expected = json.loads(self.p.run("lines", {"sport": "americanfootball_nfl", "team": "Dallas"},
+                                         FakeFetch(ok("odds.json"))))["reply"]
+        out = self.cmd("lines", "nfl Dallas", ok("sports.json"))
+        self.assertEqual(out.replace(", cached.", "."), expected)
+        self.assert_cited(out)
+
+    def test_scores_matches_the_tool_text(self):
+        expected = json.loads(self.p.run("scores", {"sport": "basketball_nba", "team": "kings"},
+                                         FakeFetch(ok("scores.json"))))["reply"]
+        out = self.cmd("scores", "nba kings", ok("sports.json"))
+        self.assertEqual(out.replace(", cached.", "."), expected)
+
+    def test_day_and_fresh_pass_through(self):
+        f = FakeFetch(ok("sports.json"), ok("scores.json"))
+        self.p.command("scores", "fresh today nba", f)
+        self.assertIn("/sports/basketball_nba/scores/", f.urls[1])
+        self.assertIn("daysFrom=1", f.urls[1])
+        seen = []
+        real = self.p.run
+        self.p.run = lambda kind, params, fetch=None: seen.append(params) or real(kind, params, fetch)
+        self.p.command("lines", "nfl tomorrow fresh", FakeFetch(ok("odds.json")))
+        self.assertEqual(seen[-1], {"sport": "americanfootball_nfl", "team": None, "day": "tomorrow", "fresh": True})
+
+    def test_no_args_gives_usage_and_the_sports(self):
+        out = self.cmd("lines", "", ok("sports.json"))
+        self.assertTrue(out.startswith("Usage: /odds <sport> [team] [today|tomorrow] [fresh]"))
+        self.assertIn("basketball_nba: NBA (Basketball)", out)
+        self.assert_cited(out)
+
+    def test_ambiguous_sport_fetches_nothing_paid(self):
+        f = FakeFetch(ok("sports.json"))
+        out = self.p.command("lines", "soccer", f)
+        self.assertIn("more than one sport", out)
+        self.assertEqual(len(f.urls), 1)
+
+    def test_api_error_is_plain_text(self):
+        out = self.cmd("lines", "nba", *[(500, b"", {})] * 3)
+        self.assertTrue(out.startswith("Could not get that from The Odds API: "))
+        self.assertNotIn("Traceback", out)
+
+    def test_missing_key_is_plain_text(self):
+        os.environ["ODDS_API_KEY"] = ""
+        out = self.cmd("scores", "nba")
+        self.assertTrue(out.startswith("Could not get that from The Odds API: "))
+        self.assertIn("ODDS_API_KEY", out)
+
+    def test_key_never_in_command_output(self):
+        out = self.cmd("lines", "nfl Dallas", ok("sports.json"), ok("odds.json"))
+        self.assertNotIn(KEY, out + self.err.getvalue())
 
 
 if __name__ == "__main__":

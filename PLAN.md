@@ -79,6 +79,16 @@ All made by Casey on 2026-11-07 unless noted.
   or move money) and by the plugin's reply hook, never by the model. Its
   tool calling is not in Local-LLM's tool-calling results. Auto-Agent stays
   on `qwen`, so the router swaps models when both VMs are used in turn.
+- **General questions too, on Hermes's keyless web search** (Casey,
+  2026-11-11). Friends may ask about any topic, not only sports. No web key
+  is set, so Hermes rotates across free vendor tiers (search on Parallel and
+  Keenable, page reads on Firecrawl and Exa). Tested 2026-11-11 with 10
+  general questions: search 10 of 10 with no rate limit, page reads 8 of 10.
+  The two failures were the sites (an Exa timeout, a Firecrawl certificate
+  error), and Hermes did not retry them on another vendor. Exa page reads
+  stop at about 3,100 characters. Rejected: a Tavily key (1,000 free credits
+  a month), because keyless held and needs no account. The vendors' terms
+  for keyless use were not checked.
 
 Rejected sources: odds-api.io (new free keys paused, free tier for
 development only), ESPN's endpoints (undocumented), balldontlie (free covers
@@ -98,6 +108,11 @@ next-day delayed).
    and its reply hook sends that text to Discord exactly, whatever the
    model wrote.
 
+The slash commands `/odds` and `/scores` skip steps 2 and 3's model: the
+plugin parses the friend's words, matches the sport against the free sports
+list, and sends the same code-written text (Casey, 2026-11-12). Built on
+v0.23.0's `register_command`, which Discord shows as native slash commands.
+
 ## Threat model
 
 Friends' messages, and any web page the web tool reads, are untrusted.
@@ -111,6 +126,7 @@ Friends' messages, and any web page the web tool reads, are untrusted.
 | Earlier channel messages steer the model | History backfill off |
 | The model invents a number | Numbers and citations are written by the plugin, never the model |
 | A friend burns the odds quota | Cache plus a quota floor in the collector |
+| A friend runs a built-in slash command (`/model`, `/tools`, `/restart`) | Not stopped. Slash commands stay ungated (Casey, 2026-11-12: friends are trusted). Gating would set `allow_admin_from` to Casey's ID. Whether `/tools` from Discord can widen the toolset was not checked |
 
 ## Load on the host
 

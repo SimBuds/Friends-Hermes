@@ -404,6 +404,37 @@ also fetches today's finals, which costs 2 credits instead of 1.
 
 `FH_TIMEZONE` (default `UTC`) sets the time zone of the times shown.
 
+### Slash commands in Discord
+
+`/odds` and `/scores` answer from the same code without calling the model,
+so they are quick, use no GPU time, and cannot pick the wrong tool. The
+friend types the arguments in one text field:
+
+```text
+/odds nba lakers
+/odds nfl tomorrow
+/scores nba today
+/odds nba lakers fresh
+```
+
+- The first word is the sport: its key (`basketball_nba`), its title
+  (`NBA`), or the key's last part (`nba`). A word that matches more than one
+  sport, such as `soccer`, lists the keys to choose from. The rest is the
+  team.
+- `today`, `tomorrow` and `fresh` work in any position, as in the tools.
+- With no arguments, the command shows its usage and the in-season sports.
+- The reply is the same text `odds_lines` or `odds_scores` gives, with the
+  source and fetch time. Looking up the sport costs no credits.
+
+Hermes v0.23.0 adds plugin commands to Discord's slash menu when the
+gateway starts, so restart the gateway service (step 3) after copying the
+plugin. Only allowlisted users can run them.
+
+Built-in Hermes commands (`/model`, `/tools`, `/new` and the rest) are not
+gated here. v0.23.0 gates slash commands only when `allow_admin_from` is set
+for the platform, so every allowlisted friend can run every built-in
+command the gateway offers (Casey, 2026-11-12: friends are trusted).
+
 ## Tests
 
 No network and no key: a fake fetch serves the sample responses from The
