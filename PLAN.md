@@ -148,6 +148,22 @@ a new session's first request held 2,736 tokens, of which 1,042 were new
 and the rest came from the router's cached prefix). On `freedom` that read
 in about 1 second, and replies generated at 41 to 51 tokens per second.
 
+## The ZBOX (moving here, 2026-11-14)
+
+The bot is moving from the VM to a fanless ZOTAC ZBOX CI321 nano, always on,
+with the model still on the PC's router (`ZBOX-HERMES-PLAN.md`). The VM
+stays as the rollback until the move is checked. Read on the box,
+2026-11-14:
+
+| Part | What is fitted | Note |
+|---|---|---|
+| OS | Debian 13.7, kernel 6.12.117, UEFI, GPT | Installed with GRUB on the removable path, because the firmware ignored the normal boot entry |
+| CPU | Intel Celeron 2961Y, 2 cores | |
+| RAM | One 2 GB DDR3L stick at 1,333 MT/s, 1.35 V (single slot) | 390 MB used at idle. The VM's gateway peaked at about 490 MB while answering, so 2 GB fits with about 900 MB spare. An 8 GB DDR3L stick is the upgrade if swap is used |
+| Disk | Toshiba MQ01ABD032, 320 GB 2.5" HDD | SMART passed, 0 reallocated, pending or uncorrectable sectors, about 5,500 hours. Lifetime maximum 76 C, so it needs airflow |
+| Network | Intel Wireless 3160 (in use), 2x Realtek RTL8111/8168 (unused) | Wi-Fi stays (Casey). DHCP from the Rogers gateway, address reserved there |
+| Admin | No `sudo`. Root work uses `su -` | The `hermes` user cannot change the system |
+
 ## Persistence split
 
 The VM is disposable. This repo is the durable home of everything except

@@ -185,6 +185,40 @@ sudo sshd -t && echo "sshd config OK"
 sudo systemctl reload ssh
 ```
 
+## ZBOX setup
+
+The bot is moving from the VM to a ZBOX on the LAN (see PLAN.md, The ZBOX).
+`scripts/install-zbox.sh` does steps 5 and 6 above and the plugin part of
+Discord step 4 there, pinned to Hermes v0.23.0. It never touches `.env`.
+
+The `hermes` user has no sudo, so root does the prerequisites once:
+
+```bash
+# Runs in: ZBOX, as hermes. Asks for the ROOT password. Safe to run twice.
+su - -c 'apt install -y git curl python3 libatomic1 && loginctl enable-linger hermes'
+loginctl show-user hermes -p Linger                      # must print: Linger=yes
+```
+
+Then, as `hermes`:
+
+```bash
+# Runs in: ZBOX, as hermes. Safe to run twice: each step prints "skip:" when done.
+if [ -d ~/Friends-Hermes/.git ]; then git -C ~/Friends-Hermes pull --ff-only; \
+  else git clone https://github.com/SimBuds/Friends-Hermes.git ~/Friends-Hermes; fi
+bash ~/Friends-Hermes/scripts/install-zbox.sh --dry-run  # lists every action, changes nothing
+bash ~/Friends-Hermes/scripts/install-zbox.sh
+```
+
+- Hermes comes from the installer in the v0.23.0 tag, checked against the
+  sha256 in `scripts/install-zbox.sha256`, and `--commit` pins the checkout
+  to that release. A changed installer stops the script with both hashes.
+  Read the new installer before updating the pinned hash.
+- The router is `http://127.0.0.1:8080/v1`, reached through the reverse
+  tunnel from the PC. Until the tunnel exists, the script's router check
+  says it is unreachable. That is expected.
+- The checks at the end print Wi-Fi power saving. On an always-on box it is
+  better off, because power saving can stall the connection.
+
 ## Discord
 
 Friends talk to Hermes in your private Discord server, or by DM. The
