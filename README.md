@@ -216,16 +216,28 @@ bash ~/Friends-Hermes/scripts/install-zbox.sh
 - The router is `http://127.0.0.1:8080/v1`, reached through the reverse
   tunnel from the PC. Until the tunnel exists, the script's router check
   says it is unreachable. That is expected.
-- The checks at the end print Wi-Fi power saving. On an always-on box it is
-  better off, because power saving can stall the connection.
+- The checks at the end print Wi-Fi power saving. It must be off. With it on
+  (seen 2026-11-15), the ZBOX dropped off the network for a moment ("No
+  route to host" from the PC) and answered pings in 70 to 100 ms. The ZBOX's
+  Intel 3160 uses the `iwlmvm` driver, whose `power_scheme=1` keeps the card
+  awake whatever manages the network:
+
+```bash
+# Runs in: ZBOX, as hermes. Asks for the ROOT password. Safe to run twice. Reboots the ZBOX.
+su - -c 'apt install -y iw && echo "options iwlmvm power_scheme=1" > /etc/modprobe.d/fh-wifi-awake.conf && cat /etc/modprobe.d/fh-wifi-awake.conf && reboot'
+# after the reboot, as hermes:
+/sbin/iw dev wlp2s0 get power_save                      # must print: Power save: off
+```
 
 ### Tunnel to the router
 
 The bot on the ZBOX reaches the PC's router through a reverse SSH tunnel that
-the PC opens. The PC needs no SSH server: a user service on the PC
-(`systemd/fh-tunnel.service`) connects out to the ZBOX and offers the PC's
-`127.0.0.1:8080` there. When the PC is off or asleep the tunnel is down, and
-`127.0.0.1:8080` on the ZBOX refuses connections.
+you open from the PC when you want the bot to answer:
+`scripts/fh-tunnel.sh`. Nothing is installed or auto-started on the PC, and
+it needs no SSH server. While the script runs, the PC's `127.0.0.1:8080` is
+also `127.0.0.1:8080` on the ZBOX. When it stops (Ctrl+C, closing the
+terminal, or the PC sleeping or off), `127.0.0.1:8080` on the ZBOX refuses
+connections and the bot answers offline (Casey, 2026-11-15).
 
 The ZBOX side is a `tunnel` user that can do one thing: listen on
 `127.0.0.1:8080` for the forward. No shell, no other ports, no agent or X11
@@ -261,21 +273,18 @@ cat ~tunnel/.ssh/authorized_keys
    The last line must print one line starting
    `restrict,port-forwarding,permitlisten="127.0.0.1:8080" ssh-ed25519`.
 
-3. On the PC, install and start the user service:
+3. On the PC, open the tunnel. It runs until Ctrl+C:
 
 ```bash
-# Runs in: local terminal, host, in this repo. Safe to run twice.
-install -D -m 644 systemd/fh-tunnel.service ~/.config/systemd/user/fh-tunnel.service
-systemctl --user daemon-reload
-systemctl --user enable --now fh-tunnel
-systemctl --user is-active fh-tunnel                     # must print: active
-journalctl --user -u fh-tunnel -n 20 --no-pager          # no "remote port forwarding failed" line
+# Runs in: local terminal, host (the PC, not the ZBOX). Keeps running. Ctrl+C closes it.
+bash ~/Apps/Friends-Hermes/scripts/fh-tunnel.sh
 ```
 
-   The first connection needs the ZBOX's host key in `~/.ssh/known_hosts`.
-   It is there if you already ran `ssh hermes@10.0.0.51` from the PC.
+   The first run needs the ZBOX's host key in `~/.ssh/known_hosts`. It is
+   there if you already ran `ssh hermes@10.0.0.51` from the PC. The ZBOX's
+   address is set in one place, the `ZBOX=` line of the script.
 
-4. Check it from the ZBOX:
+4. With the tunnel open, check it from the ZBOX:
 
 ```bash
 # Runs in: ZBOX, as hermes. Read-only.
