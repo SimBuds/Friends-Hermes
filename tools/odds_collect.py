@@ -251,6 +251,15 @@ def scores(cfg, fetch, sport, days_from=None, fresh=False):
             "credits_remaining": read_quota(cfg), "sport": sport, "games": games}
 
 
+
+def events(cfg, fetch, sport):
+    """Upcoming and live games without odds, used to find the game a pick is on. Costs no credits."""
+    _check_sport(sport)
+    data, fetched_at, from_cache = get(f"/sports/{sport}/events/", {"dateFormat": "iso"}, cfg, fetch, paid=False)
+    games = [{k: g[k] for k in ("id", "commence_time", "home_team", "away_team")} for g in data]
+    return {"source": SOURCE, "fetched_at": fetched_at, "from_cache": from_cache,
+            "credits_remaining": read_quota(cfg), "sport": sport, "games": games}
+
 def main(argv):
     try:
         cfg = settings()

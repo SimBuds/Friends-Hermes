@@ -140,6 +140,35 @@ class HappyPath(Base):
         self.assertNotIn("daysFrom", fetch.urls[0])
 
 
+class Events(Base):
+    """The free events list, used to find the game a pick'em pick is on (Phase 4)."""
+    BODY = json.dumps([
+        {"id": "e1", "sport_key": "basketball_nba", "sport_title": "NBA",
+         "commence_time": "2026-11-08T03:30:00Z", "home_team": "Los Angeles Lakers", "away_team": "Boston Celtics"},
+    ]).encode()
+
+    def test_events_shape_and_url(self):
+        fetch = FakeFetch((200, self.BODY, {}))
+        r = oc.events(self.cfg(), fetch, "basketball_nba")
+        self.assertIn("/sports/basketball_nba/events/", fetch.urls[0])
+        self.assertEqual(r["games"], [{"id": "e1", "commence_time": "2026-11-08T03:30:00Z",
+                                       "home_team": "Los Angeles Lakers", "away_team": "Boston Celtics"}])
+        self.assertEqual(r["source"], oc.SOURCE)
+        self.assertIn("fetched_at", r)
+
+    def test_events_are_free_below_the_quota_floor(self):
+        cfg = self.cfg()
+        os.makedirs(cfg["cache_dir"], exist_ok=True)
+        with open(os.path.join(cfg["cache_dir"], "quota.json"), "w") as f:
+            json.dump({"remaining": 1}, f)
+        r = oc.events(cfg, FakeFetch((200, self.BODY, {})), "basketball_nba")
+        self.assertEqual(len(r["games"]), 1)
+
+    def test_events_bad_sport_fetches_nothing(self):
+        with self.assertRaises(oc.InputError):
+            oc.events(self.cfg(), FakeFetch(), "NBA!")
+
+
 class Cache(Base):
     def test_second_call_is_served_from_cache_with_original_time(self):
         cfg = self.cfg()

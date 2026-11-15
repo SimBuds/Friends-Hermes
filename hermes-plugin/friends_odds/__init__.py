@@ -7,6 +7,7 @@ and the fetch time are written here, so the model only has to quote the
 """
 import json
 import os
+import tempfile
 import threading
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -245,6 +246,114 @@ def command(kind, raw_args, fetch=None):
     return data["reply"] if data.get("success") else ERROR_PREFIX + str(data.get("error"))
 
 
+
+# Pick'em (straight-up winner). Picks live in Hermes's plugin-data folder in the
+# bot's own home, never in the repo. One JSON list, rewritten whole under a lock.
+PICK_USAGE = "Usage: /pick <sport> <team>, for example /pick nba lakers. The pick is on that team's next game."
+_picks_lock = threading.Lock()
+
+
+class PicksError(Exception):
+    """The picks file exists but cannot be read. It is never overwritten."""
+
+
+def picks_path():
+    home = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
+    return os.path.join(home, "plugin-data", TOOLSET, "picks.json")
+
+
+def load_picks():
+    try:
+        with open(picks_path()) as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError):
+        raise PicksError(f"The picks file is unreadable ({picks_path()}). Nothing was changed.") from None
+    if not isinstance(data, list):
+        raise PicksError(f"The picks file is unreadable ({picks_path()}). Nothing was changed.")
+    return data
+
+
+def save_picks(picks):
+    path = picks_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".picks-")
+    with os.fdopen(fd, "w") as f:
+        json.dump(picks, f, indent=1)
+    os.replace(tmp, path)
+
+
+def _iso_utc(t):
+    return t.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def make_pick(source, raw_args, fetch=None):
+    """/pick: record the friend's pick on the team's next game that has not started."""
+    user_id = str(getattr(source, "user_id", "") or "")
+    if not user_id:
+        return "A pick needs a Discord user, and this message has none."
+    name = getattr(source, "user_name", None) or user_id
+    a = parse_args(raw_args)
+    if not a["sport"] or not a["team"]:
+        return PICK_USAGE
+    try:
+        zone = _zone()
+        cfg = oc.settings()
+        fetch = fetch or _fetch(cfg)
+        key, msg = resolve_sport(a["sport"], oc.sports(cfg, fetch)["sports"])
+        if msg:
+            return msg
+        result = oc.events(cfg, fetch, key)
+    except oc.OddsError as e:
+        return ERROR_PREFIX + str(e)
+    team, t = a["team"].lower(), now()
+    upcoming = sorted((g for g in result["games"]
+                       if datetime.fromisoformat(g["commence_time"].replace("Z", "+00:00")) > t
+                       and matches(team, g["home_team"], g["away_team"])),
+                      key=lambda g: g["commence_time"])
+    if not upcoming:
+        return f"No upcoming {key} game for '{a['team']}'.\n{footer(result, zone)}"
+    g = upcoming[0]
+    sides = [n for n in (g["away_team"], g["home_team"]) if team in n.lower()]
+    if len(sides) != 1:
+        return f"'{a['team']}' matches both teams in {g['away_team']} at {g['home_team']}. Use more of the name."
+    record = {"user_id": user_id, "user_name": name, "sport": key, "event_id": g["id"], "team": sides[0],
+              "home_team": g["home_team"], "away_team": g["away_team"],
+              "commence_time": g["commence_time"], "picked_at": _iso_utc(t)}
+    with _picks_lock:
+        try:
+            picks = load_picks()
+        except PicksError as e:
+            return str(e)
+        old = [p for p in picks if p["user_id"] == user_id and p["event_id"] == g["id"]]
+        picks = [p for p in picks if p not in old] + [record]
+        save_picks(picks)
+    replaced = f" This replaces your pick of {old[0]['team']}." if old else ""
+    return (f"Pick saved for {name}: {sides[0]} in {g['away_team']} at {g['home_team']}, "
+            f"{when(g['commence_time'], zone)}. It locks when the game starts.{replaced}\n{footer(result, zone)}")
+
+
+def list_picks(source):
+    """/picks: the friend's own picks, soonest game first."""
+    user_id = str(getattr(source, "user_id", "") or "")
+    try:
+        zone = _zone()
+        with _picks_lock:
+            mine = [p for p in load_picks() if p["user_id"] == user_id]
+    except (PicksError, oc.OddsError) as e:
+        return str(e)
+    if not user_id or not mine:
+        return "No picks yet. Make one with /pick <sport> <team>."
+    t = now()
+    rows = [f"Your picks, {mine[0]['user_name']}:"]
+    for p in sorted(mine, key=lambda p: p["commence_time"]):
+        started = datetime.fromisoformat(p["commence_time"].replace("Z", "+00:00")) <= t
+        rows.append(f"  {p['team']}: {p['away_team']} at {p['home_team']}, {when(p['commence_time'], zone)}"
+                    + (" (locked)" if started else ""))
+    return "\n".join(rows)
+
+
 SPORT = {"type": "string", "description": "Sport key from odds_sports, such as basketball_nba or americanfootball_nfl."}
 TEAM = {"type": "string", "description": "Part of a team name, such as 'Lakers'. Leave out to list the games."}
 DAY = {"type": "string", "enum": ["today", "tomorrow"],
@@ -322,6 +431,16 @@ def register(ctx):
             return command(_kind, raw_args)
         ctx.register_command(name, on_command, description=f"{what} from The Odds API. No AI.",
                              args_hint=ARGS_HINT)
+    def on_pick(raw_args="", source=None, **kwargs):
+        del kwargs
+        return make_pick(source, raw_args)
+
+    def on_picks(raw_args="", source=None, **kwargs):
+        del raw_args, kwargs
+        return list_picks(source)
+    ctx.register_command("pick", on_pick, description="Pick a team to win its next game (pick'em). No AI.",
+                         args_hint="<sport> <team>")
+    ctx.register_command("picks", on_picks, description="Your pick'em picks. No AI.")
     ctx.register_hook("post_tool_call", remember_reply)
     # hold_stream: Discord shows nothing until the rewrite, and a failed hook withholds the reply.
     ctx.register_hook("transform_llm_output", final_reply, hold_stream=True)

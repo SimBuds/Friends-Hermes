@@ -430,6 +430,26 @@ Hermes v0.23.0 adds plugin commands to Discord's slash menu when the
 gateway starts, so restart the gateway service (step 3) after copying the
 plugin. Only allowlisted users can run them.
 
+### Pick'em in Discord
+
+Friends pick a team to win its next game. There is no money and no spread:
+a pick is right when the team wins.
+
+```text
+/pick nba lakers      # the Lakers' next game that has not started
+/picks                # your own picks, soonest first
+```
+
+- The game comes from The Odds API's events list, which costs no credits.
+- A pick locks when its game starts. Before that, a new pick on the same
+  game replaces the old one.
+- A word that fits both teams in the game (`los angeles`) is refused. Use
+  more of the name.
+- Picks are stored in `~/.hermes/plugin-data/friends_odds/picks.json` on the
+  bot's machine, with each friend's Discord ID and display name. The file is
+  never in this repo. If it becomes unreadable, the bot says so and never
+  overwrites it.
+
 Built-in Hermes commands (`/model`, `/tools`, `/new` and the rest) are not
 gated here. v0.23.0 gates slash commands only when `allow_admin_from` is set
 for the platform, so every allowlisted friend can run every built-in

@@ -90,6 +90,13 @@ All made by Casey on 2026-11-07 unless noted.
   a month), because keyless held and needs no account. The vendors' terms
   for keyless use were not checked.
 
+- **Pick'em, straight-up winner** (Casey, 2026-11-12). `/pick <sport> <team>`
+  records a pick on that team's next game, found in The Odds API's free
+  events list, and `/picks` lists your own. A pick locks at game start. Picks
+  are the bot's first stored record about friends (Discord ID, display name,
+  picks), kept in Hermes's plugin-data folder, never in this repo (Casey,
+  2026-11-14). Grading and a leaderboard come next.
+
 Rejected sources: odds-api.io (new free keys paused, free tier for
 development only), ESPN's endpoints (undocumented), balldontlie (free covers
 one sport at 5 requests a minute), SportsDataIO free (last season,
@@ -126,7 +133,7 @@ Friends' messages, and any web page the web tool reads, are untrusted.
 | Earlier channel messages steer the model | History backfill off |
 | The model invents a number | Numbers and citations are written by the plugin, never the model |
 | A friend burns the odds quota | Cache plus a quota floor in the collector |
-| A friend runs a built-in slash command (`/model`, `/tools`, `/restart`) | Not stopped. Slash commands stay ungated (Casey, 2026-11-12: friends are trusted). Gating would set `allow_admin_from` to Casey's ID. Whether `/tools` from Discord can widen the toolset was not checked |
+| A friend runs a built-in slash command (`/model`, `/tools`, `/restart`) | Not stopped. Slash commands stay ungated (Casey, 2026-11-12: friends are trusted). Gating would set `allow_admin_from` to Casey's ID. `/tools` is not offered on Discord ("Unknown command /tools", seen 2026-11-14), so it cannot widen the toolset. `/yolo` works: any friend can turn on auto-approval for their own session (seen 2026-11-14). With no terminal or file tools there is little for it to approve. `/new` turns it off again. `/model` is offered too (seen 2026-11-14), so a friend can switch their session to another router model. That makes the router swap models, which slows Auto-Agent when it shares the GPU |
 
 ## Load on the host
 
@@ -152,6 +159,7 @@ secrets.
 | `~/.hermes/.env` in the VM | Discord token, friends' IDs, API keys | Kept | Rolled back | Lost. Casey enters them again |
 | `~/.hermes/config.yaml` in the VM | Model, toolsets, Discord keys | Kept | Rolled back | Lost. The README blocks re-apply them |
 | `~/.hermes/plugins/friends_odds/` in the VM | The plugin and a copy of `tools/odds_collect.py`, copied from this repo | Kept | Rolled back | Lost. Copied again from the repo |
+| Picks in the VM (`~/.hermes/plugin-data/friends_odds/picks.json`) | Friends' pick'em picks | Kept | Rolled back | Lost. No copy anywhere by design |
 | Collector cache in the VM (`~/.cache/friends-hermes/odds/`) | Raw API responses and the last known quota | Kept | Rolled back | Lost, by design |
 | `~/.config/systemd/user/` and `/var/lib/systemd/linger/hermes` in the VM | The gateway's user service and its start at boot | Kept | Rolled back | Lost. `hermes gateway setup` installs it again |
 | VM snapshots in `~/VMs/friends-hermes` | `clean` (fresh install) and `hermes-configured` (Hermes v0.23.0, base config, SSH keys only), both 2026-11-07 | Kept | Kept | Lost with the disk image |

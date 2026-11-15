@@ -75,9 +75,11 @@ class FakeCtx:
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.saved = {k: os.environ.get(k) for k in ("ODDS_API_KEY", "FH_CONTACT", "FH_CACHE_DIR", "FH_TIMEZONE")}
+        self.saved = {k: os.environ.get(k) for k in ("ODDS_API_KEY", "FH_CONTACT", "FH_CACHE_DIR", "FH_TIMEZONE",
+                                                      "HERMES_HOME")}
         os.environ.update({"ODDS_API_KEY": KEY, "FH_CONTACT": "test@example.invalid",
-                           "FH_CACHE_DIR": os.path.join(self.tmp.name, "cache"), "FH_TIMEZONE": "UTC"})
+                           "FH_CACHE_DIR": os.path.join(self.tmp.name, "cache"), "FH_TIMEZONE": "UTC",
+                           "HERMES_HOME": os.path.join(self.tmp.name, "hermes")})
         self.p = load_plugin(self.tmp.name)
         self.p.oc.sleep = lambda s: None
         self.err = io.StringIO()
@@ -505,8 +507,9 @@ class Commands(Base):
     def test_register_adds_odds_and_scores_with_an_args_hint(self):
         ctx = FakeCtx()
         self.p.register(ctx)
-        self.assertEqual(sorted(ctx.commands), ["odds", "scores"])
-        for name, (handler, desc, hint) in ctx.commands.items():
+        self.assertEqual(sorted(ctx.commands), ["odds", "pick", "picks", "scores"])
+        for name in ("odds", "scores"):
+            handler, desc, hint = ctx.commands[name]
             self.assertIn("sport", hint)
             self.assertTrue(desc)
 
@@ -598,6 +601,161 @@ class Commands(Base):
     def test_key_never_in_command_output(self):
         out = self.cmd("lines", "nfl Dallas", ok("sports.json"), ok("odds.json"))
         self.assertNotIn(KEY, out + self.err.getvalue())
+
+
+class Source:
+    def __init__(self, user_id="111", user_name="Bruce"):
+        self.user_id, self.user_name = user_id, user_name
+
+
+class Picks(Base):
+    """/pick and /picks: straight-up pick'em, stored in Hermes plugin-data (Phase 4).
+    Now is pinned to Sat 2026-11-07 15:00 UTC."""
+
+    def setUp(self):
+        super().setUp()
+        from datetime import datetime, timezone
+        self.p.now = lambda: datetime(2026, 11, 7, 15, 0, tzinfo=timezone.utc)
+
+    def events(self, *games):
+        out = [{"id": gid, "sport_key": "basketball_nba", "sport_title": "NBA", "commence_time": t,
+                "home_team": home, "away_team": away} for gid, away, home, t in games]
+        return 200, json.dumps(out).encode(), {}
+
+    LAKERS = ("g1", "Boston Celtics", "Los Angeles Lakers", "2026-11-08T03:30:00Z")
+    LATER = ("g2", "Utah Jazz", "Los Angeles Lakers", "2026-11-10T03:00:00Z")
+    STARTED = ("g0", "Denver Nuggets", "Los Angeles Lakers", "2026-11-07T14:00:00Z")
+
+    def pick(self, raw, *answers, source=None):
+        return self.p.make_pick(source or Source(), raw, FakeFetch(*answers))
+
+    def stored(self):
+        path = os.path.join(os.environ["HERMES_HOME"], "plugin-data", "friends_odds", "picks.json")
+        with open(path) as f:
+            return json.load(f)
+
+    def test_register_adds_pick_and_picks(self):
+        ctx = FakeCtx()
+        self.p.register(ctx)
+        self.assertIn("pick", ctx.commands)
+        self.assertIn("picks", ctx.commands)
+        self.assertIn("team", ctx.commands["pick"][2])
+
+    def test_pick_handlers_receive_the_source(self):
+        ctx = FakeCtx()
+        self.p.register(ctx)
+        seen = []
+        self.p.make_pick = lambda source, raw, fetch=None: seen.append((source.user_id, raw)) or "ok"
+        self.p.list_picks = lambda source: seen.append((source.user_id, "list")) or "ok"
+        ctx.commands["pick"][0]("nba lakers", source=Source("7"), session_id="s", platform="discord")
+        ctx.commands["picks"][0]("", source=Source("7"))
+        self.assertEqual(seen, [("7", "nba lakers"), ("7", "list")])
+
+    def test_valid_pick_is_stored_and_confirmed(self):
+        out = self.pick("nba lakers", ok("sports.json"), self.events(self.LAKERS, self.LATER))
+        self.assertIn("Pick saved for Bruce: Los Angeles Lakers", out)
+        self.assertIn("Boston Celtics at Los Angeles Lakers, Sun Nov 08 03:30 UTC", out)
+        self.assert_cited(out)
+        rec = self.stored()
+        self.assertEqual(len(rec), 1)
+        self.assertEqual({k: rec[0][k] for k in ("user_id", "user_name", "sport", "event_id", "team")},
+                         {"user_id": "111", "user_name": "Bruce", "sport": "basketball_nba",
+                          "event_id": "g1", "team": "Los Angeles Lakers"})
+        self.assertEqual(rec[0]["commence_time"], "2026-11-08T03:30:00Z")
+        self.assertEqual(rec[0]["picked_at"], "2026-11-07T15:00:00Z")
+
+    def test_pick_the_away_team(self):
+        self.pick("nba celtics", ok("sports.json"), self.events(self.LAKERS))
+        self.assertEqual(self.stored()[0]["team"], "Boston Celtics")
+
+    def test_started_game_is_never_picked(self):
+        self.pick("nba lakers", ok("sports.json"), self.events(self.STARTED, self.LATER))
+        self.assertEqual(self.stored()[0]["event_id"], "g2")
+
+    def test_repick_same_game_replaces(self):
+        self.pick("nba lakers", ok("sports.json"), self.events(self.LAKERS))
+        out = self.pick("nba celtics")
+        rec = self.stored()
+        self.assertEqual(len(rec), 1)
+        self.assertEqual(rec[0]["team"], "Boston Celtics")
+        self.assertIn("replaces your pick of Los Angeles Lakers", out)
+
+    def test_two_friends_keep_separate_picks(self):
+        self.pick("nba lakers", ok("sports.json"), self.events(self.LAKERS))
+        self.pick("nba celtics", source=Source("222", "Selina"))
+        self.assertEqual(sorted(r["user_id"] for r in self.stored()), ["111", "222"])
+
+    def test_team_with_no_upcoming_game(self):
+        out = self.pick("nba knicks", ok("sports.json"), self.events(self.LAKERS))
+        self.assertIn("No upcoming basketball_nba game for 'knicks'", out)
+        self.assertFalse(os.path.exists(os.path.join(os.environ["HERMES_HOME"], "plugin-data")))
+
+    def test_team_word_matching_both_teams(self):
+        out = self.pick("nba los angeles", ok("sports.json"),
+                        self.events(("g5", "Los Angeles Clippers", "Los Angeles Lakers", "2026-11-08T03:30:00Z")))
+        self.assertIn("matches both teams", out)
+
+    def test_ambiguous_team_word_matches_both_names(self):
+        out = self.pick("nba o", ok("sports.json"), self.events(self.LAKERS))
+        self.assertIn("matches both teams", out)
+
+    def test_missing_team(self):
+        out = self.pick("nba", ok("sports.json"))
+        self.assertTrue(out.startswith("Usage: /pick <sport> <team>"))
+
+    def test_unknown_sport(self):
+        out = self.pick("curling team", ok("sports.json"))
+        self.assertIn("No in-season sport matches 'curling'", out)
+
+    def test_no_user_is_refused(self):
+        out = self.p.make_pick(Source(user_id=None), "nba lakers", FakeFetch())
+        self.assertIn("needs a Discord user", out)
+
+    def test_api_error_is_plain_text(self):
+        out = self.pick("nba lakers", *[(500, b"", {})] * 3)
+        self.assertTrue(out.startswith("Could not get that from The Odds API: "))
+
+    def test_list_none(self):
+        self.assertIn("No picks yet", self.p.list_picks(Source()))
+
+    def test_list_several_in_start_order_and_only_mine(self):
+        self.pick("nba lakers", ok("sports.json"), self.events(self.LATER, self.LAKERS))
+        self.pick("nba jazz")
+        self.pick("nba celtics", source=Source("222", "Selina"))
+        out = self.p.list_picks(Source())
+        lines = out.split("\n")
+        self.assertTrue(lines[0].startswith("Your picks, Bruce"))
+        self.assertIn("Los Angeles Lakers: Boston Celtics at Los Angeles Lakers", lines[1])
+        self.assertIn("Utah Jazz: Utah Jazz at Los Angeles Lakers", lines[2])
+        self.assertEqual(len(lines), 3)
+
+    def test_list_marks_started_games_locked(self):
+        self.pick("nba lakers", ok("sports.json"), self.events(self.LAKERS))
+        from datetime import datetime, timezone
+        self.p.now = lambda: datetime(2026, 11, 8, 4, 0, tzinfo=timezone.utc)
+        self.assertIn("(locked)", self.p.list_picks(Source()))
+
+    def test_corrupt_file_is_never_overwritten(self):
+        path = os.path.join(os.environ["HERMES_HOME"], "plugin-data", "friends_odds", "picks.json")
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w") as f:
+            f.write("{not json")
+        out = self.pick("nba lakers", ok("sports.json"), self.events(self.LAKERS))
+        self.assertIn("picks file is unreadable", out)
+        with open(path) as f:
+            self.assertEqual(f.read(), "{not json")
+        self.assertIn("picks file is unreadable", self.p.list_picks(Source()))
+
+    def test_concurrent_picks_all_land(self):
+        import threading
+        self.pick("nba lakers", ok("sports.json"), self.events(self.LAKERS))  # warms the caches
+        users = [Source(str(1000 + i), f"F{i}") for i in range(8)]
+        threads = [threading.Thread(target=self.p.make_pick, args=(u, "nba lakers", FakeFetch())) for u in users]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(len(self.stored()), 9)
 
 
 if __name__ == "__main__":
