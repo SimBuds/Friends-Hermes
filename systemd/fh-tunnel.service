@@ -1,0 +1,15 @@
+# Friends-Hermes tunnel as a PC user service: starts at login, restarts when the link drops.
+# `systemctl --user stop fh-tunnel` takes the bot offline (it answers offline from code).
+# Install (Casey): README, ZBOX setup, Tunnel to the router.
+[Unit]
+Description=Friends-Hermes reverse tunnel to the ZBOX (router 127.0.0.1:8080)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/bash %h/Apps/Friends-Hermes/scripts/fh-tunnel.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

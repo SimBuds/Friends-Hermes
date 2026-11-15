@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
 # Friends-Hermes tunnel: lend the ZBOX this PC's llama.cpp router (127.0.0.1:8080).
-# Run it on the PC when you want the bot to answer. It keeps running in this terminal.
-# Ctrl+C (or closing the terminal, or the PC sleeping) ends it, and the bot answers offline.
+# Normally run by the PC user service systemd/fh-tunnel.service (README, Tunnel to the router).
+# It also runs by hand in a terminal, until Ctrl+C. While it is down the bot answers offline.
 #
 #   bash ~/Apps/Friends-Hermes/scripts/fh-tunnel.sh
 set -euo pipefail
 
-# The ZBOX's address, in this one place. No DHCP reservation (Casey, 2026-11-14):
-# if the ZBOX's IP changes, edit this line.
-ZBOX=10.0.0.51
+# The ZBOX's address lives outside the repo (host addresses are never committed), in one file.
+# No DHCP reservation (Casey, 2026-11-14): if the ZBOX's IP changes, edit that file.
+ADDR_FILE="$HOME/.config/friends-hermes/zbox"
 KEY="$HOME/.ssh/fh_tunnel"
 ROUTER=http://127.0.0.1:8080
 
 [ "$(uname -n)" != hermes ] || { echo "STOP: this runs on the PC, not the ZBOX." >&2; exit 1; }
 [ -f "$KEY" ] || { echo "STOP: $KEY is missing. See README, Tunnel to the router, step 1." >&2; exit 1; }
+[ -r "$ADDR_FILE" ] || { echo "STOP: $ADDR_FILE is missing. It holds the ZBOX's address. See README, Tunnel to the router, step 3." >&2; exit 1; }
+ZBOX="$(tr -d '[:space:]' < "$ADDR_FILE")"
+[[ "$ZBOX" =~ ^[A-Za-z0-9.:-]+$ ]] || { echo "STOP: $ADDR_FILE must hold one address or host name, got '$ZBOX'." >&2; exit 1; }
 if curl -fsS -m 3 "$ROUTER/health" >/dev/null; then
     echo "ok: router is up at $ROUTER"
 else

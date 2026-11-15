@@ -1109,7 +1109,8 @@ repos, and one ended in a colon with no template after it.)
   terms and `robots.txt` are respected per *Fetching from the web*. (Casey,
   2026-11-07. The one-line "Information only, not betting advice." note was
   removed from every reply on 2026-11-10, Casey.)
-- **API keys are Casey's and live only in the VM's `~/.hermes/.env`.** Casey
+- **API keys are Casey's and live only in `~/.hermes/.env` on the machine
+  running the bot** (the ZBOX, and the VM's copy only as the rollback). Casey
   registers every account and key. No key appears in this repo, a test
   fixture, a log, or a command line. Captured fixtures are scrubbed of keys
   and quota headers that identify the account. (Casey, 2026-11-07)
@@ -1128,16 +1129,24 @@ repos, and one ended in a colon with no template after it.)
 - **Nothing is shared with Auto-Agent's VM.** No memory, sessions, skills,
   tokens, Telegram, snapshots, or SSH key reuse between the two. Auto-Agent's
   repo is read for patterns and never edited from here. This VM's SSH port
-  is 22221 (Auto-Agent uses 22220). (Casey, 2026-11-07)
-- **The VM runs only when Casey starts it.** It shares the host's single GPU
-  slot with Auto-Agent's 03:00 night job and hand runs, and RAM is tight with
-  a 35B model loaded. Nothing here starts the VM at boot, schedules it, or adds a
-  cron job. Inside the VM, the gateway is a user service that starts with
-  the VM, which keeps "the bot runs only when Casey starts the VM" true.
-  (Casey, 2026-11-07. Service kept the same day, after `hermes gateway setup`
-  installed it.)
+  is 22221 (Auto-Agent uses 22220). The ZBOX is dedicated to this bot, and
+  its `tunnel` user may only forward `127.0.0.1:8080`. (Casey, 2026-11-07.
+  ZBOX added 2026-11-15.)
+- **The bot runs all the time on the ZBOX, and the model only while the
+  PC's tunnel is up.** The gateway is a user service on the ZBOX, with
+  linger on. The tunnel to the router is a user service on the PC
+  (`systemd/fh-tunnel.service`) that starts at Casey's login. Stopping it,
+  or the PC sleeping or off, takes the model away, and the plugin then
+  answers offline from code with no model call. Nothing here adds a timer or
+  cron job on either machine, or starts the VM, which is the rollback and
+  runs only when Casey starts it. The ZBOX's address lives on the PC in
+  `~/.config/friends-hermes/zbox`, never in this repo. (Casey, 2026-11-15.
+  Was "the VM runs only when Casey starts it", 2026-11-07. The PC shares one
+  GPU slot with Auto-Agent's 03:00 night job, so the router may be serving
+  another model and swap.)
 - **The router is Local-LLM's contract, consumed here and never changed from
-  here.** Host `127.0.0.1:8080`, reached from the guest at `10.0.2.2:8080`,
+  here.** Host `127.0.0.1:8080`, reached from the ZBOX at `127.0.0.1:8080`
+  through the tunnel (from the VM guest at `10.0.2.2:8080`, the rollback),
   model `freedom`, context 131,072. A need to change any of them is raised as
   a Local-LLM change. Hermes's `model.context_length` follows the router's
   served value. `freedom` is the router's uncensored Qwen 3.6 35B, chosen
@@ -1145,11 +1154,16 @@ repos, and one ended in a colon with no template after it.)
   limits above are held by the tools and the plugin's code, never by the
   model. (Casey, 2026-11-07. Model `qwen` until Casey switched this VM to
   `freedom` on 2026-11-09.)
-- **Environment labels for handed commands are `local terminal, host` and
-  `inside the VM`.** A correct command on the wrong side of the VM boundary
-  either fails or changes the host. (Casey, 2026-11-07)
+- **Environment labels for handed commands are `local terminal, host`,
+  `ZBOX` and `inside the VM`.** A correct command on the wrong machine either
+  fails or changes the wrong one. Each block that must run on the PC checks
+  it is not on the ZBOX before acting. (Casey, 2026-11-07. `ZBOX` added
+  2026-11-15, after the tunnel install was run three times in an SSH
+  session on the ZBOX instead of on the PC.)
 - **Everything outside this repo is Casey's.** That covers `~/VMs`, the guest
-  and everything in it, any `quickemu` or `quickget` command that writes,
+  and everything in it, the ZBOX and everything on it (root, the `hermes`
+  and `tunnel` users, `.env`), the PC's tunnel service and its address file,
+  any `quickemu` or `quickget` command that writes,
   the Discord bot and server, API accounts, and the Local-LLM router. The
   agent hands over those commands under tier 0. Read-only host checks
   (`curl` to the router's `/health` and `/v1/models`, `quickemu --version`,

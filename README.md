@@ -229,15 +229,49 @@ su - -c 'apt install -y iw && echo "options iwlmvm power_scheme=1" > /etc/modpro
 /sbin/iw dev wlp2s0 get power_save                      # must print: Power save: off
 ```
 
+### Start the bot on the ZBOX
+
+Copy `~/.hermes/.env` (and `~/.hermes/plugin-data/friends_odds/picks.json`, to
+keep picks) from the old machine, never through this repo. Add
+`FH_ROUTER_URL=http://127.0.0.1:8080` to that `.env` (see Offline reply).
+Then install the gateway service:
+
+```bash
+# Runs in: ZBOX, as hermes. Answer "n" to "Start the gateway now?", "y" to start at boot.
+~/.local/bin/hermes gateway install
+systemctl --user restart hermes-gateway.service
+sleep 60
+systemctl --user is-active hermes-gateway.service                    # must print: active
+systemctl --user show -p NRestarts --value hermes-gateway.service    # must print 0
+```
+
+Two traps in v0.23.0, both seen 2026-11-15:
+
+- Answering "y" to "Start the gateway now?" starts a gateway outside the
+  service, in your login session. The service then loops, printing "The host
+  gateway already serves profile 'default'", and the stray copy dies with the
+  session. If it happened: `systemctl --user stop hermes-gateway.service`,
+  `hermes gateway stop`, then start the service.
+- On the gateway's first start, Hermes installs the Discord library while it
+  starts, and `adapter_slash_auth.py` keeps `discord = None` for that process.
+  Commands picked from Discord's menu then fail with "The application did
+  not respond" (journal: `'NoneType' object has no attribute 'DMChannel'`),
+  while typed messages work. The restart above clears it.
+
 ### Tunnel to the router
 
-The bot on the ZBOX reaches the PC's router through a reverse SSH tunnel that
-you open from the PC when you want the bot to answer:
-`scripts/fh-tunnel.sh`. Nothing is installed or auto-started on the PC, and
-it needs no SSH server. While the script runs, the PC's `127.0.0.1:8080` is
-also `127.0.0.1:8080` on the ZBOX. When it stops (Ctrl+C, closing the
-terminal, or the PC sleeping or off), `127.0.0.1:8080` on the ZBOX refuses
-connections and the bot answers offline (Casey, 2026-11-15).
+The bot on the ZBOX reaches the PC's router through a reverse SSH tunnel
+that the PC opens: `scripts/fh-tunnel.sh`, run by the PC user service
+`systemd/fh-tunnel.service` (Casey, 2026-11-15). The service starts when you
+log in and restarts within 10 seconds when the link drops. The PC needs no
+SSH server. While the tunnel is up, the PC's `127.0.0.1:8080` is also
+`127.0.0.1:8080` on the ZBOX. While it is down (the service stopped, or the
+PC asleep or off), `127.0.0.1:8080` on the ZBOX refuses connections and the
+bot answers offline.
+
+The ZBOX's address is kept on the PC in `~/.config/friends-hermes/zbox`,
+never in this repo. With no IP reservation, the ZBOX's address can change.
+If it does, edit that one file and restart the service.
 
 The ZBOX side is a `tunnel` user that can do one thing: listen on
 `127.0.0.1:8080` for the forward. No shell, no other ports, no agent or X11
@@ -248,7 +282,7 @@ forwarding.
 
 ```bash
 # Runs in: local terminal, host. Safe to run twice: the key is made only if missing.
-ZBOX=10.0.0.51                                           # EDIT if the ZBOX's address changed
+ZBOX=203.0.113.10                                        # EDIT: the ZBOX's address (ip -br a on the ZBOX)
 [ -f ~/.ssh/fh_tunnel ] && echo "skip: ~/.ssh/fh_tunnel exists" || ssh-keygen -t ed25519 -N '' -C fh-tunnel -f ~/.ssh/fh_tunnel
 scp ~/.ssh/fh_tunnel.pub hermes@"$ZBOX":fh_tunnel.pub
 ```
@@ -273,18 +307,28 @@ cat ~tunnel/.ssh/authorized_keys
    The last line must print one line starting
    `restrict,port-forwarding,permitlisten="127.0.0.1:8080" ssh-ed25519`.
 
-3. On the PC, open the tunnel. It runs until Ctrl+C:
+3. On the PC, save the ZBOX's address and start the service:
 
 ```bash
-# Runs in: local terminal, host (the PC, not the ZBOX). Keeps running. Ctrl+C closes it.
-bash ~/Apps/Friends-Hermes/scripts/fh-tunnel.sh
+# Runs in: local terminal, host (the PC, not the ZBOX). Safe to run twice.
+ZBOX=203.0.113.10                                        # EDIT: the ZBOX's address
+mkdir -p ~/.config/friends-hermes && printf '%s\n' "$ZBOX" > ~/.config/friends-hermes/zbox
+cat ~/.config/friends-hermes/zbox                        # must print the ZBOX's address
+install -D -m 644 ~/Apps/Friends-Hermes/systemd/fh-tunnel.service ~/.config/systemd/user/fh-tunnel.service
+systemctl --user daemon-reload
+systemctl --user enable --now fh-tunnel
+systemctl --user is-active fh-tunnel                     # must print: active
+journalctl --user -u fh-tunnel -n 20 --no-pager          # expect "tunnel: open to tunnel@..." and no STOP line
 ```
 
-   The first run needs the ZBOX's host key in `~/.ssh/known_hosts`. It is
-   there if you already ran `ssh hermes@10.0.0.51` from the PC. The ZBOX's
-   address is set in one place, the `ZBOX=` line of the script.
+   The service needs the ZBOX's host key in `~/.ssh/known_hosts`, because it
+   cannot answer a prompt. It is there if you have run `ssh hermes@` to the
+   ZBOX from the PC. To take the bot offline: `systemctl --user stop
+   fh-tunnel`. To stop it starting at login: `systemctl --user disable
+   fh-tunnel`. `bash ~/Apps/Friends-Hermes/scripts/fh-tunnel.sh` still runs
+   the tunnel by hand when the service is stopped.
 
-4. With the tunnel open, check it from the ZBOX:
+4. With the service running, check it from the ZBOX:
 
 ```bash
 # Runs in: ZBOX, as hermes. Read-only.
