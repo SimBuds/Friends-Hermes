@@ -104,6 +104,15 @@ All made by Casey on 2026-11-07 unless noted.
   picks), kept in Hermes's plugin-data folder, never in this repo (Casey,
   2026-11-14). Grading and a leaderboard come next.
 
+- **Offline reply from code** (Casey, ZBOX plan). On the ZBOX the bot runs
+  all the time but the model only while Casey's tunnel is open. A
+  `pre_llm_call` hook checks the router's `/health` (2 s) and, when nothing
+  answers, ends the turn with a fixed "offline" text and no model call
+  (v0.23.0 `agent/turn_context.py`, `{"action": "block", "message"}`). Only a
+  failed connection counts as offline, never an HTTP error, so a model swap
+  is not reported as offline. `FH_ROUTER_URL` turns it on, so the VM is
+  unchanged.
+
 Rejected sources: odds-api.io (new free keys paused, free tier for
 development only), ESPN's endpoints (undocumented), balldontlie (free covers
 one sport at 5 requests a minute), SportsDataIO free (last season,

@@ -511,6 +511,20 @@ also fetches today's finals, which costs 2 credits instead of 1.
 
 `FH_TIMEZONE` (default `UTC`) sets the time zone of the times shown.
 
+### Offline reply
+
+On the ZBOX the model is only reachable while the tunnel from the PC is open.
+Set `FH_ROUTER_URL` in `~/.hermes/.env` to the router's address there
+(`http://127.0.0.1:8080`). Before every model call, the plugin checks
+`/health` with a 2-second limit. If nothing answers, the reply is "The
+assistant is offline right now. Try again later." and no model call is made.
+
+- Any HTTP answer counts as up, including a 503 while the router swaps
+  models, so a slow router is never reported offline.
+- Unset (the VM, which reaches the router directly), there is no check.
+- Slash commands (`/odds`, `/scores`, `/pick`, `/picks`) never use the model,
+  so they keep working while the PC is off.
+
 ### Slash commands in Discord
 
 `/odds` and `/scores` answer from the same code without calling the model,
