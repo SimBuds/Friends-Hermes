@@ -129,6 +129,10 @@ else
 fi
 for dev in /sys/class/net/wl*; do
     [ -e "$dev" ] || continue
-    say "Wi-Fi $(basename "$dev") power save: $(iw dev "$(basename "$dev")" get power_save 2>&1 || true)"
+    if command -v iw >/dev/null; then
+        say "Wi-Fi $(basename "$dev") power save: $(iw dev "$(basename "$dev")" get power_save 2>&1 || true)"
+    else
+        say "note: iw is not installed, so Wi-Fi power save is unknown. As root: su - -c 'apt install -y iw'"
+    fi
 done
 free -m

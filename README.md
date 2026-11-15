@@ -219,6 +219,70 @@ bash ~/Friends-Hermes/scripts/install-zbox.sh
 - The checks at the end print Wi-Fi power saving. On an always-on box it is
   better off, because power saving can stall the connection.
 
+### Tunnel to the router
+
+The bot on the ZBOX reaches the PC's router through a reverse SSH tunnel that
+the PC opens. The PC needs no SSH server: a user service on the PC
+(`systemd/fh-tunnel.service`) connects out to the ZBOX and offers the PC's
+`127.0.0.1:8080` there. When the PC is off or asleep the tunnel is down, and
+`127.0.0.1:8080` on the ZBOX refuses connections.
+
+The ZBOX side is a `tunnel` user that can do one thing: listen on
+`127.0.0.1:8080` for the forward. No shell, no other ports, no agent or X11
+forwarding.
+
+1. On the PC, make a key just for the tunnel (no passphrase, since a service
+   uses it) and copy its public half to the ZBOX:
+
+```bash
+# Runs in: local terminal, host. Safe to run twice: the key is made only if missing.
+ZBOX=10.0.0.51                                           # EDIT if the ZBOX's address changed
+[ -f ~/.ssh/fh_tunnel ] && echo "skip: ~/.ssh/fh_tunnel exists" || ssh-keygen -t ed25519 -N '' -C fh-tunnel -f ~/.ssh/fh_tunnel
+scp ~/.ssh/fh_tunnel.pub hermes@"$ZBOX":fh_tunnel.pub
+```
+
+2. On the ZBOX, as root, create the `tunnel` user and install that key with
+   its limits:
+
+```bash
+# Runs in: ZBOX, as hermes. Asks for the ROOT password. Safe to run twice.
+su - -c '
+set -e
+id tunnel >/dev/null 2>&1 && echo "skip: user tunnel exists" || adduser --disabled-password --gecos "" --shell /usr/sbin/nologin tunnel
+install -d -m 700 -o tunnel -g tunnel ~tunnel/.ssh
+KEY=$(cat /home/hermes/fh_tunnel.pub)
+case "$KEY" in ssh-ed25519\ *fh-tunnel) ;; *) echo "STOP: /home/hermes/fh_tunnel.pub is not the fh-tunnel key"; exit 1 ;; esac
+printf "restrict,port-forwarding,permitlisten=\"127.0.0.1:8080\" %s\n" "$KEY" > ~tunnel/.ssh/authorized_keys
+chown tunnel:tunnel ~tunnel/.ssh/authorized_keys && chmod 600 ~tunnel/.ssh/authorized_keys
+cat ~tunnel/.ssh/authorized_keys
+'
+```
+
+   The last line must print one line starting
+   `restrict,port-forwarding,permitlisten="127.0.0.1:8080" ssh-ed25519`.
+
+3. On the PC, install and start the user service:
+
+```bash
+# Runs in: local terminal, host, in this repo. Safe to run twice.
+install -D -m 644 systemd/fh-tunnel.service ~/.config/systemd/user/fh-tunnel.service
+systemctl --user daemon-reload
+systemctl --user enable --now fh-tunnel
+systemctl --user is-active fh-tunnel                     # must print: active
+journalctl --user -u fh-tunnel -n 20 --no-pager          # no "remote port forwarding failed" line
+```
+
+   The first connection needs the ZBOX's host key in `~/.ssh/known_hosts`.
+   It is there if you already ran `ssh hermes@10.0.0.51` from the PC.
+
+4. Check it from the ZBOX:
+
+```bash
+# Runs in: ZBOX, as hermes. Read-only.
+curl -s -m 5 127.0.0.1:8080/health; echo                 # must print the router's ok status
+curl -s -m 5 127.0.0.1:8080/v1/models | grep -o '"id":"[^"]*"'   # must list "freedom"
+```
+
 ## Discord
 
 Friends talk to Hermes in your private Discord server, or by DM. The

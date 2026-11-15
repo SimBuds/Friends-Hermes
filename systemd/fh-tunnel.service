@@ -1,0 +1,23 @@
+# Friends-Hermes reverse tunnel: gives the ZBOX 127.0.0.1:8080, the PC's llama.cpp router.
+# A user unit on the PC. It connects out to the ZBOX's sshd, so the PC runs no SSH server.
+# Install (Casey): see README, ZBOX setup, "Tunnel to the router".
+[Unit]
+Description=Friends-Hermes reverse tunnel to the ZBOX (router 127.0.0.1:8080)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# The ZBOX's address, in this one place. No DHCP reservation (Casey, 2026-11-14):
+# if the ZBOX's IP changes, edit this line, then: systemctl --user daemon-reload && systemctl --user restart fh-tunnel
+Environment=ZBOX=10.0.0.51
+# -N: no shell, forwarding only. ExitOnForwardFailure: die (and be restarted) if the ZBOX side
+# cannot bind 8080. ServerAlive: notice a dead link within about 45 s.
+ExecStart=/usr/bin/ssh -N -T \
+    -i %h/.ssh/fh_tunnel -o IdentitiesOnly=yes -o BatchMode=yes \
+    -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+    -R 127.0.0.1:8080:127.0.0.1:8080 tunnel@${ZBOX}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

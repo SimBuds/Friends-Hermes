@@ -9,12 +9,18 @@ from the model.
 ## The shape of it
 
 ```text
-Host                                        VM (Debian, quickemu, port 22221)
-  llama.cpp router 127.0.0.1:8080  <-----     Hermes Agent v0.23.0, base_url http://10.0.2.2:8080/v1
-                                              Discord gateway, allowlisted friends only
-                                              plugin: friends_odds tools  --------> The Odds API
-Discord (friends) <------------------------>  gateway
+PC (started by hand, sleeps)                 ZBOX (Debian 13, always on, Wi-Fi)
+  llama.cpp router 127.0.0.1:8080              Hermes Agent v0.23.0, base_url http://127.0.0.1:8080/v1
+  fh-tunnel user service  ---- ssh -R ---->    127.0.0.1:8080 (the tunnel user's one allowed forward)
+                                               Discord gateway, allowlisted friends only
+                                               plugin: friends_odds tools  --------> The Odds API
+Discord (friends) <------------------------->  gateway
 ```
+
+The ZBOX replaces the VM (Debian, quickemu, SSH port 22221), which reached
+the router at `10.0.2.2:8080`. The VM stays as the rollback until the move
+is checked. The tunnel runs from the PC, so the PC needs no SSH server, and
+the router's bind address and contract do not change.
 
 ## Decisions
 
