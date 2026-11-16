@@ -1,14 +1,17 @@
 # Friends-Hermes
 
-[Hermes Agent](https://github.com/NousResearch/hermes-agent) in a QEMU VM,
-answering a few friends in a private Discord server as a sports-betting
-research assistant: odds and lines across books, scores, and schedules
-(stats are not in v1). It does not bet, and every number comes from a documented API with
-its source and fetch time.
+[Hermes Agent](https://github.com/NousResearch/hermes-agent) on a ZBOX mini
+PC, answering a few friends in a private Discord server. It is a
+sports-betting research assistant (odds and lines across books, scores,
+schedules, and a pick'em game, with stats not in v1) that also answers
+general questions from the web. It does not bet. Every number comes from a
+documented API with its source and fetch time, and web answers end with the
+pages they used.
 
-It uses the Local-LLM router on the host (`freedom`, an uncensored Qwen 3.6
-35B, context 131,072) and runs
-only when started by hand.
+It runs all the time and uses the Local-LLM router on Casey's PC (`freedom`,
+an uncensored Qwen 3.6 35B, context 131,072) through a tunnel. While the PC
+is off, it answers offline and the slash commands still work. The original
+QEMU VM setup below is kept as the rollback.
 
 [`PLAN.md`](PLAN.md) holds the why. [`AGENTS.md`](AGENTS.md) holds the rules
 for coding agents.
@@ -535,6 +538,10 @@ The plugin also decides what a friend sees in Discord, in code:
   Whatever the model wrote is dropped. A sports-list lookup before a lines
   or scores call is left out. A tool error is shown plainly, never the
   model's guess.
+- After a web search or page read, the model's reply gets a Sources footer
+  written by code: the pages read, or else the search results, at most 5,
+  each in `<>` so Discord shows no preview, with the search time. Links the
+  model wrote in its own text are left as they are.
 - Any other Discord reply is left as the model wrote it.
 - While a reply is being made, Discord shows only the typing indicator
   (`hold_stream`). If the plugin's hook fails, Hermes sends a short "reply

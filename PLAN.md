@@ -1,10 +1,12 @@
 # PLAN.md: Friends-Hermes
 
-A second Hermes Agent, in its own QEMU VM on Casey's workstation, that
-answers Casey's friends in a private Discord server as a sports-betting
-research assistant. It reports odds, lines, scores, and schedules (stats
-are not in v1). It never bets, and every number in an answer comes from a documented API, not
-from the model.
+A second Hermes Agent, on a dedicated ZBOX mini PC (the original QEMU VM on
+Casey's workstation is the rollback), that answers Casey's friends in a
+private Discord server. It is a sports-betting research assistant (odds,
+lines, scores, schedules, and pick'em, with stats not in v1) and also
+answers general questions from the web. It never bets, every number in an
+answer comes from a documented API, not from the model, and web answers end
+with a code-written list of their sources.
 
 ## The shape of it
 
@@ -133,7 +135,10 @@ next-day delayed).
 3. The plugin calls the collector, which fetches the API (cached, rate
    limited per host, backoff on 429 and 5xx) and returns plain data with
    `source` and `fetched_at`.
-4. The plugin formats the numbers, the source, and the fetch time in code,
+4. For a general question, Hermes searches the web instead, and the
+   plugin appends the pages it read (or the search results) as a Sources
+   footer, written by code from the tool results (Casey, 2026-11-11).
+5. The plugin formats the numbers, the source, and the fetch time in code,
    and its reply hook sends that text to Discord exactly, whatever the
    model wrote.
 
@@ -154,6 +159,7 @@ Friends' messages, and any web page the web tool reads, are untrusted.
 | A stranger reaches the bot | User ID allowlist only. No roles, no allow-all, no channel list alone |
 | Earlier channel messages steer the model | History backfill off |
 | The model invents a number | Numbers and citations are written by the plugin, never the model |
+| The model invents or drops a web source | The Sources footer is built from the web tools' own results, never from the model's text |
 | A friend burns the odds quota | Cache plus a quota floor in the collector |
 | A friend runs a built-in slash command (`/model`, `/tools`, `/restart`) | Not stopped. Slash commands stay ungated (Casey, 2026-11-12: friends are trusted). Gating would set `allow_admin_from` to Casey's ID. `/tools` is not offered on Discord ("Unknown command /tools", seen 2026-11-14), so it cannot widen the toolset. `/yolo` works: any friend can turn on auto-approval for their own session (seen 2026-11-14). With no terminal or file tools there is little for it to approve. `/new` turns it off again. `/model` is offered too (seen 2026-11-14), so a friend can switch their session to another router model. That makes the router swap models, which slows Auto-Agent when it shares the GPU |
 

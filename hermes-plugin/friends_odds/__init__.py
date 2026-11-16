@@ -513,31 +513,82 @@ SCHEMAS = {
 }
 
 
-def remember_reply(tool_name="", result="", turn_id="", **kwargs):
-    """post_tool_call: keep each odds tool's code-written text for this turn's final reply."""
-    del kwargs
-    if tool_name not in ODDS_TOOLS or not turn_id:
-        return
+WEB_TOOLS = ("web_search", "web_extract")
+MAX_SOURCES = 5
+
+
+def web_sources(tool_name, result):
+    """URLs a web tool returned: search results, or the pages extract read without an error.
+    Shapes from the v0.23.0 source (tools/web_tools.py, tools/web_tools_extract.py). Anything
+    else gives no URLs, never an exception."""
     try:
         data = json.loads(result)
-        text = data["reply"] if data.get("success") else ERROR_PREFIX + str(data.get("error", "unknown error"))
+        if tool_name == "web_search":
+            items = data["data"]["web"] if data.get("success") else []
+        elif tool_name == "web_extract":
+            items = [r for r in data["results"] if not r.get("error")]
+        else:
+            return []
+        return [i["url"] for i in items if isinstance(i, dict) and isinstance(i.get("url"), str) and i["url"]]
     except (ValueError, TypeError, AttributeError, KeyError):
-        text = ERROR_PREFIX + "the tool returned an unreadable result."
+        return []
+
+
+def remember_reply(tool_name="", result="", turn_id="", **kwargs):
+    """post_tool_call: keep each odds tool's code-written text, and each web tool's URLs, for this
+    turn's final reply."""
+    del kwargs
+    if not turn_id or tool_name not in ODDS_TOOLS + WEB_TOOLS:
+        return
+    if tool_name in WEB_TOOLS:
+        entry = (web_sources(tool_name, result), now())
+    else:
+        try:
+            data = json.loads(result)
+            entry = data["reply"] if data.get("success") else ERROR_PREFIX + str(data.get("error", "unknown error"))
+        except (ValueError, TypeError, AttributeError, KeyError):
+            entry = ERROR_PREFIX + "the tool returned an unreadable result."
     with _replies_lock:
-        _replies.setdefault(turn_id, []).append((tool_name, text))
+        _replies.setdefault(turn_id, []).append((tool_name, entry))
+
+
+def sources_footer(seen):
+    """Pages read, else search results, deduped, at most MAX_SOURCES, wrapped in <> so Discord
+    shows no previews. Stamped with the first search time in FH_TIMEZONE (UTC if that is bad)."""
+    def urls(name):
+        out = []
+        for n, (found, _) in seen:
+            if n == name:
+                for u in found:
+                    if u not in out:
+                        out.append(u)
+        return out
+    picked = (urls("web_extract") or urls("web_search"))[:MAX_SOURCES]
+    if not picked:
+        return None
+    try:
+        zone = _zone()
+    except oc.ConfigError:
+        zone = timezone.utc
+    at = min(t for n, (_, t) in seen).astimezone(zone).strftime("%a %b %d %H:%M %Z")
+    return f"Sources (searched {at}):\n" + "\n".join(f"<{u}>" for u in picked)
 
 
 def final_reply(response_text="", platform="", turn_id="", **kwargs):
     """transform_llm_output: on Discord, after an odds tool the reply is the tool's text exactly.
-    Any other reply is left as the model wrote it (None)."""
+    After web tools, the model's reply gets a code-written Sources footer. Otherwise None."""
     del kwargs
     with _replies_lock:
         seen = _replies.pop(turn_id, [])
     if platform != "discord" or not response_text or not seen:
         return None
-    # odds_sports is a lookup step when a lines or scores call follows it.
-    shown = [t for name, t in seen if name != "odds_sports"] or [t for _, t in seen]
-    return "\n\n".join(shown)
+    odds = [(n, t) for n, t in seen if n in ODDS_TOOLS]
+    if odds:
+        # odds_sports is a lookup step when a lines or scores call follows it.
+        shown = [t for name, t in odds if name != "odds_sports"] or [t for _, t in odds]
+        return "\n\n".join(shown)
+    foot = sources_footer([(n, e) for n, e in seen if n in WEB_TOOLS])
+    return f"{response_text}\n\n{foot}" if foot else None
 
 
 def register(ctx):

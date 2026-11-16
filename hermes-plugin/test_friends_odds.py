@@ -988,6 +988,106 @@ class Leaderboard(Base):
             self.assertEqual(fh.read(), "{bad")
 
 
+class WebSources(Base):
+    """A code-written Sources footer on Discord replies that used web tools (Phase 2).
+    Shapes from the v0.23.0 source: search {"success", "data": {"web": [{"title","url",...}]}},
+    extract {"results": [{"url","title","content","error"}]}. Now is pinned to 2026-11-07 15:00 UTC."""
+
+    def setUp(self):
+        super().setUp()
+        from datetime import datetime, timezone
+        self.p.now = lambda: datetime(2026, 11, 7, 15, 0, tzinfo=timezone.utc)
+
+    def search(self, *urls, success=True):
+        return json.dumps({"success": success, "data": {"web": [
+            {"title": f"t{i}", "url": u, "description": "d", "position": i} for i, u in enumerate(urls, 1)]}})
+
+    def extract(self, *pages):
+        return json.dumps({"results": [{"url": u, "title": "t", "content": "c", "error": err} for u, err in pages]})
+
+    def remember(self, tool, result, turn="w1"):
+        self.p.remember_reply(tool_name=tool, args={}, result=result, task_id="x", session_id="s",
+                              tool_call_id="c", turn_id=turn, duration_ms=5)
+
+    def final(self, text, turn="w1", platform="discord"):
+        return self.p.final_reply(response_text=text, session_id="s", model="freedom", platform=platform, turn_id=turn)
+
+    def test_search_only_lists_the_results(self):
+        self.remember("web_search", self.search("https://example.com/a", "https://example.com/b"))
+        out = self.final("Paris is the capital.")
+        self.assertEqual(out, "Paris is the capital.\n\nSources (searched Sat Nov 07 15:00 UTC):\n"
+                              "<https://example.com/a>\n<https://example.com/b>")
+
+    def test_pages_read_win_over_search_results(self):
+        self.remember("web_search", self.search("https://example.com/a", "https://example.com/b"))
+        self.remember("web_extract", self.extract(("https://example.com/b", None)))
+        out = self.final("answer")
+        self.assertTrue(out.endswith("Sources (searched Sat Nov 07 15:00 UTC):\n<https://example.com/b>"))
+        self.assertNotIn("example.com/a", out)
+
+    def test_errored_page_is_left_out(self):
+        self.remember("web_search", self.search("https://example.com/a"))
+        self.remember("web_extract", self.extract(("https://example.com/x", "CRAWL_LIVECRAWL_TIMEOUT"),
+                                                  ("https://example.com/y", None)))
+        out = self.final("answer")
+        self.assertIn("<https://example.com/y>", out)
+        self.assertNotIn("example.com/x", out)
+
+    def test_all_pages_errored_falls_back_to_search(self):
+        self.remember("web_search", self.search("https://example.com/a"))
+        self.remember("web_extract", self.extract(("https://example.com/x", "SCRAPE_SSL_ERROR")))
+        out = self.final("answer")
+        self.assertIn("<https://example.com/a>", out)
+
+    def test_duplicates_listed_once(self):
+        self.remember("web_search", self.search("https://example.com/a", "https://example.com/a", "https://example.com/b"))
+        out = self.final("answer")
+        self.assertEqual(out.count("<https://example.com/a>"), 1)
+
+    def test_at_most_five(self):
+        self.remember("web_search", self.search(*[f"https://example.com/{i}" for i in range(8)]))
+        out = self.final("answer")
+        self.assertEqual(out.count("<https://"), 5)
+        self.assertIn("<https://example.com/4>", out)
+        self.assertNotIn("example.com/5", out)
+
+    def test_failed_search_adds_nothing(self):
+        self.remember("web_search", self.search("https://example.com/a", success=False))
+        self.assertIsNone(self.final("answer"))
+
+    def test_unreadable_result_adds_nothing(self):
+        self.remember("web_search", "not json")
+        self.remember("web_extract", json.dumps({"results": "nope"}))
+        self.assertIsNone(self.final("answer"))
+
+    def test_odds_text_wins_over_web(self):
+        lines = self.p.run("lines", {"sport": "americanfootball_nfl", "team": "Dallas"}, FakeFetch(ok("odds.json")))
+        self.remember("web_search", self.search("https://example.com/a"))
+        self.remember("odds_lines", lines)
+        self.assertEqual(self.final("model text"), json.loads(lines)["reply"])
+
+    def test_other_platforms_unchanged(self):
+        self.remember("web_search", self.search("https://example.com/a"), turn="w9")
+        self.assertIsNone(self.final("answer", turn="w9", platform="cli"))
+
+    def test_empty_reply_unchanged(self):
+        self.remember("web_search", self.search("https://example.com/a"))
+        self.assertIsNone(self.final(""))
+
+    def test_time_follows_fh_timezone_and_falls_back_to_utc(self):
+        os.environ["FH_TIMEZONE"] = "America/New_York"
+        self.remember("web_search", self.search("https://example.com/a"))
+        self.assertIn("(searched Sat Nov 07 10:00 EST)", self.final("answer"))
+        os.environ["FH_TIMEZONE"] = "Mars/Olympus"
+        self.remember("web_search", self.search("https://example.com/a"), turn="w2")
+        self.assertIn("(searched Sat Nov 07 15:00 UTC)", self.final("answer", turn="w2"))
+
+    def test_web_sources_helper_is_pure(self):
+        self.assertEqual(self.p.web_sources("web_search", self.search("https://example.com/a")), ["https://example.com/a"])
+        self.assertEqual(self.p.web_sources("web_extract", self.extract(("https://example.com/b", ""))), ["https://example.com/b"])
+        self.assertEqual(self.p.web_sources("odds_lines", "{}"), [])
+
+
 if __name__ == "__main__":
     result = unittest.main(exit=False, verbosity=1).result
     failed = len(result.failures) + len(result.errors)
