@@ -393,6 +393,89 @@ def offline_reply(platform="", **kwargs):
     return None if up else {"action": "block", "message": OFFLINE_TEXT}
 
 
+
+# Grading (Phase 5). Picks are graded only when someone asks for /leaderboard: there is no
+# scheduler. The API returns finals from at most 3 days back, so an open pick whose game began
+# longer ago than that and is missing from the scores can never be graded: it becomes "expired".
+GRADE_DAYS = 3
+
+
+def _started(p, t):
+    return datetime.fromisoformat(p["commence_time"].replace("Z", "+00:00")) <= t
+
+
+def grade(picks, games, t):
+    """Set "result" (win, loss, push, expired) on open picks the scores settle. A tie is a push."""
+    by_id = {g["id"]: g for g in games}
+    cutoff = t - timedelta(days=GRADE_DAYS)
+    for p in picks:
+        if p.get("result") or not _started(p, t):
+            continue
+        g = by_id.get(p["event_id"])
+        if g and g["completed"] and g["scores"]:
+            got = {s["name"]: int(float(s["score"])) for s in g["scores"]}
+            other = g["away_team"] if p["team"] == g["home_team"] else g["home_team"]
+            mine, theirs = got.get(p["team"]), got.get(other)
+            if mine is not None and theirs is not None:
+                p["result"] = "win" if mine > theirs else "loss" if mine < theirs else "push"
+        elif not g and datetime.fromisoformat(p["commence_time"].replace("Z", "+00:00")) < cutoff:
+            p["result"] = "expired"
+    return picks
+
+
+def leaderboard(picks):
+    """Rows ranked by wins, then win rate, then name. Win rate leaves pushes out."""
+    rows = {}
+    for p in picks:
+        r = rows.setdefault(p["user_id"], {"name": p["user_name"], "win": 0, "loss": 0, "push": 0,
+                                           "expired": 0, "open": 0})
+        r[p.get("result") or "open"] += 1
+    for r in rows.values():
+        decided = r["win"] + r["loss"]
+        r["rate"] = r["win"] / decided if decided else None
+    return sorted(rows.values(), key=lambda r: (-r["win"], -(r["rate"] or 0), r["name"].lower()))
+
+
+def show_leaderboard(raw_args="", fetch=None):
+    """/leaderboard: grade what the scores settle (one pull per sport with a started open pick)."""
+    del raw_args
+    try:
+        zone = _zone()
+        with _picks_lock:
+            picks = load_picks()
+            if not picks:
+                return "No picks yet. Make one with /pick <sport> <team>."
+            t = now()
+            sports = sorted({p["sport"] for p in picks if not p.get("result") and _started(p, t)})
+            notes, cites = [], []
+            if sports:
+                cfg = oc.settings()
+                fetch = fetch or _fetch(cfg)
+            for sport in sports:
+                try:
+                    result = oc.scores(cfg, fetch, sport, GRADE_DAYS)
+                except oc.OddsError as e:
+                    notes.append(f"Grading skipped for {sport}: {e}")
+                    continue
+                grade([p for p in picks if p["sport"] == sport], result["games"], t)
+                cites.append(f"{sport} scores: " + footer(result, zone))
+            save_picks(picks)
+    except (PicksError, oc.OddsError) as e:
+        return str(e)
+    out = ["Pick'em leaderboard (straight-up winners, ties are pushes):"]
+    for i, r in enumerate(leaderboard(picks), 1):
+        rate = f"{r['rate']:.0%}" if r["rate"] is not None else "-"
+        line = f"{i}. {r['name']}: {r['win']}-{r['loss']}"
+        if r["push"]:
+            line += f", {r['push']} push" + ("es" if r["push"] > 1 else "")
+        line += f", {rate}"
+        extra = [f"{r[k]} {k}" for k in ("open", "expired") if r[k]]
+        if extra:
+            line += " (" + ", ".join(extra) + ")"
+        out.append(line)
+    return "\n".join(out + notes + cites)
+
+
 SPORT = {"type": "string", "description": "Sport key from odds_sports, such as basketball_nba or americanfootball_nfl."}
 TEAM = {"type": "string", "description": "Part of a team name, such as 'Lakers'. Leave out to list the games."}
 DAY = {"type": "string", "enum": ["today", "tomorrow"],
@@ -480,6 +563,11 @@ def register(ctx):
     ctx.register_command("pick", on_pick, description="Pick a team to win its next game (pick'em). No AI.",
                          args_hint="<sport> <team>")
     ctx.register_command("picks", on_picks, description="Your pick'em picks. No AI.")
+
+    def on_leaderboard(raw_args="", **kwargs):
+        del kwargs
+        return show_leaderboard(raw_args)
+    ctx.register_command("leaderboard", on_leaderboard, description="Pick'em standings, graded from final scores. No AI.")
     ctx.register_hook("pre_llm_call", offline_reply)
     ctx.register_hook("post_tool_call", remember_reply)
     # hold_stream: Discord shows nothing until the rewrite, and a failed hook withholds the reply.

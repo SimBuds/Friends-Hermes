@@ -603,6 +603,7 @@ a pick is right when the team wins.
 ```text
 /pick nba lakers      # the Lakers' next game that has not started
 /picks                # your own picks, soonest first
+/leaderboard          # grades finished picks, then ranks everyone
 ```
 
 - The game comes from The Odds API's events list, which costs no credits.
@@ -610,6 +611,15 @@ a pick is right when the team wins.
   game replaces the old one.
 - A word that fits both teams in the game (`los angeles`) is refused. Use
   more of the name.
+- `/leaderboard` grades picks whose games have finished, from The Odds
+  API's final scores: a win, a loss, or a push for a tie. Pushes are left
+  out of the win rate. Friends are ranked by wins, then win rate, then name.
+  It costs 2 credits per sport that has a started, ungraded pick, and
+  nothing when there is none.
+- Grading happens only when someone runs `/leaderboard`. The API keeps
+  finals for 3 days, so a pick whose game is older than that and was never
+  graded is marked expired and not counted. Run `/leaderboard` at least
+  every few days.
 - Picks are stored in `~/.hermes/plugin-data/friends_odds/picks.json` on the
   bot's machine, with each friend's Discord ID and display name. The file is
   never in this repo. If it becomes unreadable, the bot says so and never

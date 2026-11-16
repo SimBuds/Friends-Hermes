@@ -508,7 +508,7 @@ class Commands(Base):
     def test_register_adds_odds_and_scores_with_an_args_hint(self):
         ctx = FakeCtx()
         self.p.register(ctx)
-        self.assertEqual(sorted(ctx.commands), ["odds", "pick", "picks", "scores"])
+        self.assertEqual(sorted(ctx.commands), ["leaderboard", "odds", "pick", "picks", "scores"])
         for name in ("odds", "scores"):
             handler, desc, hint = ctx.commands[name]
             self.assertIn("sport", hint)
@@ -842,6 +842,150 @@ class Offline(Base):
         start = time.monotonic()
         self.assertEqual(self.hook()["action"], "block")
         self.assertLess(time.monotonic() - start, 2.5)
+
+
+class Leaderboard(Base):
+    """/leaderboard: grade finished picks from final scores, then rank friends (Phase 5).
+    Now is pinned to Sat 2026-11-07 15:00 UTC. A tie is a push (Casey, 2026-11-16)."""
+
+    def setUp(self):
+        super().setUp()
+        from datetime import datetime, timezone
+        self.p.now = lambda: datetime(2026, 11, 7, 15, 0, tzinfo=timezone.utc)
+
+    def write(self, *picks):
+        path = os.path.join(os.environ["HERMES_HOME"], "plugin-data", "friends_odds", "picks.json")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(list(picks), f)
+        return path
+
+    def stored(self):
+        path = os.path.join(os.environ["HERMES_HOME"], "plugin-data", "friends_odds", "picks.json")
+        with open(path) as f:
+            return json.load(f)
+
+    def pick(self, user, name, event, team, t, sport="basketball_nba", result=None):
+        rec = {"user_id": user, "user_name": name, "sport": sport, "event_id": event, "team": team,
+               "home_team": "Home Team", "away_team": "Away Team", "commence_time": t,
+               "picked_at": "2026-11-06T00:00:00Z"}
+        if result:
+            rec["result"] = result
+        return rec
+
+    def scores(self, *games, sport="basketball_nba"):
+        out = [{"id": gid, "sport_key": sport, "sport_title": "X", "commence_time": "2026-11-07T02:00:00Z",
+                "completed": done, "home_team": "Home Team", "away_team": "Away Team",
+                "scores": None if home is None else [{"name": "Home Team", "score": str(home)},
+                                                     {"name": "Away Team", "score": str(away)}],
+                "last_update": None} for gid, done, home, away in games]
+        return 200, json.dumps(out).encode(), {}
+
+    def board(self, *answers):
+        f = FakeFetch(*answers)
+        return self.p.show_leaderboard("", f), f
+
+    STARTED = "2026-11-07T02:00:00Z"
+    FUTURE = "2026-11-09T02:00:00Z"
+    OLD = "2026-11-02T02:00:00Z"
+
+    def test_register_adds_leaderboard(self):
+        ctx = FakeCtx()
+        self.p.register(ctx)
+        self.assertIn("leaderboard", ctx.commands)
+
+    def test_win_loss_and_push_are_graded_and_stored(self):
+        self.write(self.pick("1", "Bruce", "w", "Home Team", self.STARTED),
+                   self.pick("1", "Bruce", "l", "Away Team", self.STARTED),
+                   self.pick("1", "Bruce", "p", "Home Team", self.STARTED))
+        out, f = self.board(self.scores(("w", True, 110, 100), ("l", True, 110, 100), ("p", True, 2, 2)))
+        self.assertEqual({r["event_id"]: r["result"] for r in self.stored()}, {"w": "win", "l": "loss", "p": "push"})
+        self.assertIn("Bruce: 1-1, 1 push, 50%", out)
+        self.assertIn("daysFrom=3", f.urls[0])
+        self.assert_cited(out)
+
+    def test_unfinished_game_stays_open(self):
+        self.write(self.pick("1", "Bruce", "g", "Home Team", self.STARTED))
+        out, _ = self.board(self.scores(("g", False, 50, 48)))
+        self.assertNotIn("result", self.stored()[0])
+        self.assertIn("1 open", out)
+
+    def test_future_games_cost_no_credits(self):
+        self.write(self.pick("1", "Bruce", "g", "Home Team", self.FUTURE))
+        out, f = self.board()
+        self.assertEqual(f.urls, [])
+        self.assertIn("1 open", out)
+
+    def test_old_game_missing_from_scores_expires(self):
+        self.write(self.pick("1", "Bruce", "old", "Home Team", self.OLD))
+        out, _ = self.board(self.scores())
+        self.assertEqual(self.stored()[0]["result"], "expired")
+        self.assertIn("1 expired", out)
+
+    def test_recent_game_missing_from_scores_stays_open(self):
+        self.write(self.pick("1", "Bruce", "g", "Home Team", self.STARTED))
+        self.board(self.scores())
+        self.assertNotIn("result", self.stored()[0])
+
+    def test_no_picks(self):
+        out, f = self.board()
+        self.assertIn("No picks yet", out)
+        self.assertEqual(f.urls, [])
+
+    def test_graded_picks_are_not_fetched_again(self):
+        self.write(self.pick("1", "Bruce", "w", "Home Team", self.STARTED, result="win"))
+        out, f = self.board()
+        self.assertEqual(f.urls, [])
+        self.assertIn("Bruce: 1-0", out)
+
+    def test_one_scores_pull_per_sport_with_started_open_picks(self):
+        self.write(self.pick("1", "Bruce", "a", "Home Team", self.STARTED),
+                   self.pick("2", "Selina", "b", "Home Team", self.STARTED, sport="icehockey_nhl"),
+                   self.pick("2", "Selina", "c", "Home Team", self.FUTURE, sport="soccer_epl"))
+        out, f = self.board(self.scores(("a", True, 3, 1)), self.scores(("b", True, 1, 3), sport="icehockey_nhl"))
+        self.assertEqual(len(f.urls), 2)
+        self.assertTrue(any("/basketball_nba/scores/" in u for u in f.urls))
+        self.assertTrue(any("/icehockey_nhl/scores/" in u for u in f.urls))
+
+    def test_quota_floor_shows_stored_grades_and_says_grading_was_skipped(self):
+        cache = os.path.join(os.environ["FH_CACHE_DIR"], "odds")
+        os.makedirs(cache, exist_ok=True)
+        with open(os.path.join(cache, "quota.json"), "w") as fh:
+            json.dump({"remaining": 1}, fh)
+        self.write(self.pick("1", "Bruce", "w", "Home Team", self.STARTED, result="win"),
+                   self.pick("1", "Bruce", "g", "Home Team", self.STARTED))
+        out, f = self.board()
+        self.assertIn("Bruce: 1-0", out)
+        self.assertIn("Grading skipped for basketball_nba", out)
+        self.assertNotIn("result", self.stored()[1])
+
+    def test_ranking_by_wins_then_rate_then_name(self):
+        recs = [self.pick("1", "Zed", "z1", "Home Team", self.STARTED, result="win"),
+                self.pick("1", "Zed", "z2", "Home Team", self.STARTED, result="win"),
+                self.pick("2", "Amy", "a1", "Home Team", self.STARTED, result="win"),
+                self.pick("2", "Amy", "a2", "Home Team", self.STARTED, result="win"),
+                self.pick("3", "Bob", "b1", "Home Team", self.STARTED, result="win"),
+                self.pick("3", "Bob", "b2", "Home Team", self.STARTED, result="win"),
+                self.pick("3", "Bob", "b3", "Home Team", self.STARTED, result="loss"),
+                self.pick("4", "Cy", "c1", "Home Team", self.STARTED, result="win")]
+        self.write(*recs)
+        out, _ = self.board()
+        rows = [l for l in out.split("\n") if l.startswith(("1.", "2.", "3.", "4."))]
+        self.assertEqual([r.split(":")[0] for r in rows], ["1. Amy", "2. Zed", "3. Bob", "4. Cy"])
+
+    def test_no_decided_picks_shows_a_dash_rate(self):
+        self.write(self.pick("1", "Bruce", "p", "Home Team", self.STARTED, result="push"))
+        out, _ = self.board()
+        self.assertIn("Bruce: 0-0, 1 push, -", out)
+
+    def test_corrupt_file_is_reported_and_kept(self):
+        path = self.write()
+        with open(path, "w") as fh:
+            fh.write("{bad")
+        out, f = self.board()
+        self.assertIn("picks file is unreadable", out)
+        with open(path) as fh:
+            self.assertEqual(fh.read(), "{bad")
 
 
 if __name__ == "__main__":

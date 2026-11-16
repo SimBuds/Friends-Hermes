@@ -105,7 +105,10 @@ All made by Casey on 2026-11-07 unless noted.
   events list, and `/picks` lists your own. A pick locks at game start. Picks
   are the bot's first stored record about friends (Discord ID, display name,
   picks), kept in Hermes's plugin-data folder, never in this repo (Casey,
-  2026-11-14). Grading and a leaderboard come next.
+  2026-11-14). `/leaderboard` grades started picks from final scores when
+  someone runs it (no scheduler), counts a tie as a push left out of the
+  win rate (Casey, 2026-11-16), and marks a pick expired when its game is
+  older than the API's 3 days of finals and was never graded.
 
 - **Offline reply from code** (Casey, ZBOX plan). On the ZBOX the bot runs
   all the time but the model only while Casey's tunnel is open. A
