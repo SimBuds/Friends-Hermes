@@ -1,17 +1,14 @@
 # Friends-Hermes
 
-[Hermes Agent](https://github.com/NousResearch/hermes-agent) on a ZBOX mini
-PC, answering a few friends in a private Discord server. It is a
-sports-betting research assistant (odds and lines across books, scores,
-schedules, and a pick'em game, with stats not in v1) that also answers
-general questions from the web. It does not bet. Every number comes from a
-documented API with its source and fetch time, and web answers end with the
-pages they used.
+[Hermes Agent](https://github.com/NousResearch/hermes-agent) in a QEMU VM,
+answering a few friends in a private Discord server. It is a sports-betting
+research assistant (odds and lines across books, scores, schedules, and a
+pick'em game, with stats not in v1) that also answers general questions
+from the web. It does not bet. Every number comes from a documented API with
+its source and fetch time, and web answers end with the pages they used.
 
-It runs all the time and uses the Local-LLM router on Casey's PC (`freedom`,
-an uncensored Qwen 3.6 35B, context 131,072) through a tunnel. While the PC
-is off, it answers offline and the slash commands still work. The original
-QEMU VM setup below is kept as the rollback.
+It uses the Local-LLM router on the host (`freedom`, an uncensored Qwen 3.6
+35B, context 131,072) and runs only when started by hand.
 
 [`PLAN.md`](PLAN.md) holds the why. [`AGENTS.md`](AGENTS.md) holds the rules
 for coding agents.
@@ -186,157 +183,6 @@ ssh -p 22221 -o BatchMode=yes hermes@localhost true; echo "key check exit=$?"   
 echo 'PasswordAuthentication no' | sudo tee /etc/ssh/sshd_config.d/10-no-password.conf
 sudo sshd -t && echo "sshd config OK"
 sudo systemctl reload ssh
-```
-
-## ZBOX setup
-
-The bot is moving from the VM to a ZBOX on the LAN (see PLAN.md, The ZBOX).
-`scripts/install-zbox.sh` does steps 5 and 6 above and the plugin part of
-Discord step 4 there, pinned to Hermes v0.23.0. It never touches `.env`.
-
-The `hermes` user has no sudo, so root does the prerequisites once:
-
-```bash
-# Runs in: ZBOX, as hermes. Asks for the ROOT password. Safe to run twice.
-su - -c 'apt install -y git curl python3 libatomic1 && loginctl enable-linger hermes'
-loginctl show-user hermes -p Linger                      # must print: Linger=yes
-```
-
-Then, as `hermes`:
-
-```bash
-# Runs in: ZBOX, as hermes. Safe to run twice: each step prints "skip:" when done.
-if [ -d ~/Friends-Hermes/.git ]; then git -C ~/Friends-Hermes pull --ff-only; \
-  else git clone https://github.com/SimBuds/Friends-Hermes.git ~/Friends-Hermes; fi
-bash ~/Friends-Hermes/scripts/install-zbox.sh --dry-run  # lists every action, changes nothing
-bash ~/Friends-Hermes/scripts/install-zbox.sh
-```
-
-- Hermes comes from the installer in the v0.23.0 tag, checked against the
-  sha256 in `scripts/install-zbox.sha256`, and `--commit` pins the checkout
-  to that release. A changed installer stops the script with both hashes.
-  Read the new installer before updating the pinned hash.
-- The router is `http://127.0.0.1:8080/v1`, reached through the reverse
-  tunnel from the PC. Until the tunnel exists, the script's router check
-  says it is unreachable. That is expected.
-- The checks at the end print Wi-Fi power saving. It must be off. With it on
-  (seen 2026-11-15), the ZBOX dropped off the network for a moment ("No
-  route to host" from the PC) and answered pings in 70 to 100 ms. The ZBOX's
-  Intel 3160 uses the `iwlmvm` driver, whose `power_scheme=1` keeps the card
-  awake whatever manages the network:
-
-```bash
-# Runs in: ZBOX, as hermes. Asks for the ROOT password. Safe to run twice. Reboots the ZBOX.
-su - -c 'apt install -y iw && echo "options iwlmvm power_scheme=1" > /etc/modprobe.d/fh-wifi-awake.conf && cat /etc/modprobe.d/fh-wifi-awake.conf && reboot'
-# after the reboot, as hermes:
-/sbin/iw dev wlp2s0 get power_save                      # must print: Power save: off
-```
-
-### Start the bot on the ZBOX
-
-Copy `~/.hermes/.env` (and `~/.hermes/plugin-data/friends_odds/picks.json`, to
-keep picks) from the old machine, never through this repo. Add
-`FH_ROUTER_URL=http://127.0.0.1:8080` to that `.env` (see Offline reply).
-Then install the gateway service:
-
-```bash
-# Runs in: ZBOX, as hermes. Answer "n" to "Start the gateway now?", "y" to start at boot.
-~/.local/bin/hermes gateway install
-systemctl --user restart hermes-gateway.service
-sleep 60
-systemctl --user is-active hermes-gateway.service                    # must print: active
-systemctl --user show -p NRestarts --value hermes-gateway.service    # must print 0
-```
-
-Two traps in v0.23.0, both seen 2026-11-15:
-
-- Answering "y" to "Start the gateway now?" starts a gateway outside the
-  service, in your login session. The service then loops, printing "The host
-  gateway already serves profile 'default'", and the stray copy dies with the
-  session. If it happened: `systemctl --user stop hermes-gateway.service`,
-  `hermes gateway stop`, then start the service.
-- On the gateway's first start, Hermes installs the Discord library while it
-  starts, and `adapter_slash_auth.py` keeps `discord = None` for that process.
-  Commands picked from Discord's menu then fail with "The application did
-  not respond" (journal: `'NoneType' object has no attribute 'DMChannel'`),
-  while typed messages work. The restart above clears it.
-
-### Tunnel to the router
-
-The bot on the ZBOX reaches the PC's router through a reverse SSH tunnel
-that the PC opens: `scripts/fh-tunnel.sh`, run by the PC user service
-`systemd/fh-tunnel.service` (Casey, 2026-11-15). The service starts when you
-log in and restarts within 10 seconds when the link drops. The PC needs no
-SSH server. While the tunnel is up, the PC's `127.0.0.1:8080` is also
-`127.0.0.1:8080` on the ZBOX. While it is down (the service stopped, or the
-PC asleep or off), `127.0.0.1:8080` on the ZBOX refuses connections and the
-bot answers offline.
-
-The ZBOX's address is kept on the PC in `~/.config/friends-hermes/zbox`,
-never in this repo. With no IP reservation, the ZBOX's address can change.
-If it does, edit that one file and restart the service.
-
-The ZBOX side is a `tunnel` user that can do one thing: listen on
-`127.0.0.1:8080` for the forward. No shell, no other ports, no agent or X11
-forwarding.
-
-1. On the PC, make a key just for the tunnel (no passphrase, since a service
-   uses it) and copy its public half to the ZBOX:
-
-```bash
-# Runs in: local terminal, host. Safe to run twice: the key is made only if missing.
-ZBOX=203.0.113.10                                        # EDIT: the ZBOX's address (ip -br a on the ZBOX)
-[ -f ~/.ssh/fh_tunnel ] && echo "skip: ~/.ssh/fh_tunnel exists" || ssh-keygen -t ed25519 -N '' -C fh-tunnel -f ~/.ssh/fh_tunnel
-scp ~/.ssh/fh_tunnel.pub hermes@"$ZBOX":fh_tunnel.pub
-```
-
-2. On the ZBOX, as root, create the `tunnel` user and install that key with
-   its limits:
-
-```bash
-# Runs in: ZBOX, as hermes. Asks for the ROOT password. Safe to run twice.
-su - -c '
-set -e
-id tunnel >/dev/null 2>&1 && echo "skip: user tunnel exists" || adduser --disabled-password --gecos "" --shell /usr/sbin/nologin tunnel
-install -d -m 700 -o tunnel -g tunnel ~tunnel/.ssh
-KEY=$(cat /home/hermes/fh_tunnel.pub)
-case "$KEY" in ssh-ed25519\ *fh-tunnel) ;; *) echo "STOP: /home/hermes/fh_tunnel.pub is not the fh-tunnel key"; exit 1 ;; esac
-printf "restrict,port-forwarding,permitlisten=\"127.0.0.1:8080\" %s\n" "$KEY" > ~tunnel/.ssh/authorized_keys
-chown tunnel:tunnel ~tunnel/.ssh/authorized_keys && chmod 600 ~tunnel/.ssh/authorized_keys
-cat ~tunnel/.ssh/authorized_keys
-'
-```
-
-   The last line must print one line starting
-   `restrict,port-forwarding,permitlisten="127.0.0.1:8080" ssh-ed25519`.
-
-3. On the PC, save the ZBOX's address and start the service:
-
-```bash
-# Runs in: local terminal, host (the PC, not the ZBOX). Safe to run twice.
-ZBOX=203.0.113.10                                        # EDIT: the ZBOX's address
-mkdir -p ~/.config/friends-hermes && printf '%s\n' "$ZBOX" > ~/.config/friends-hermes/zbox
-cat ~/.config/friends-hermes/zbox                        # must print the ZBOX's address
-install -D -m 644 ~/Apps/Friends-Hermes/systemd/fh-tunnel.service ~/.config/systemd/user/fh-tunnel.service
-systemctl --user daemon-reload
-systemctl --user enable --now fh-tunnel
-systemctl --user is-active fh-tunnel                     # must print: active
-journalctl --user -u fh-tunnel -n 20 --no-pager          # expect "tunnel: open to tunnel@..." and no STOP line
-```
-
-   The service needs the ZBOX's host key in `~/.ssh/known_hosts`, because it
-   cannot answer a prompt. It is there if you have run `ssh hermes@` to the
-   ZBOX from the PC. To take the bot offline: `systemctl --user stop
-   fh-tunnel`. To stop it starting at login: `systemctl --user disable
-   fh-tunnel`. `bash ~/Apps/Friends-Hermes/scripts/fh-tunnel.sh` still runs
-   the tunnel by hand when the service is stopped.
-
-4. With the service running, check it from the ZBOX:
-
-```bash
-# Runs in: ZBOX, as hermes. Read-only.
-curl -s -m 5 127.0.0.1:8080/health; echo                 # must print the router's ok status
-curl -s -m 5 127.0.0.1:8080/v1/models | grep -o '"id":"[^"]*"'   # must list "freedom"
 ```
 
 ## Discord
@@ -562,20 +408,6 @@ also fetches today's finals, which costs 2 credits instead of 1.
 
 `FH_TIMEZONE` (default `UTC`) sets the time zone of the times shown.
 
-### Offline reply
-
-On the ZBOX the model is only reachable while the tunnel from the PC is open.
-Set `FH_ROUTER_URL` in `~/.hermes/.env` to the router's address there
-(`http://127.0.0.1:8080`). Before every model call, the plugin checks
-`/health` with a 2-second limit. If nothing answers, the reply is "The
-assistant is offline right now. Try again later." and no model call is made.
-
-- Any HTTP answer counts as up, including a 503 while the router swaps
-  models, so a slow router is never reported offline.
-- Unset (the VM, which reaches the router directly), there is no check.
-- Slash commands (`/odds`, `/scores`, `/pick`, `/picks`) never use the model,
-  so they keep working while the PC is off.
-
 ### Slash commands in Discord
 
 `/odds` and `/scores` answer from the same code without calling the model,
@@ -644,6 +476,6 @@ Odds API's v4 guide, saved in `tools/fixtures/odds/`.
 
 ```bash
 # Runs in: local terminal, host, in this repo. Must end with failed=0 and exit 0.
-python3 tools/test_odds_collect.py       # passed=33
-python3 hermes-plugin/test_friends_odds.py  # passed=49
+python3 tools/test_odds_collect.py       # passed=36
+python3 hermes-plugin/test_friends_odds.py  # passed=109
 ```

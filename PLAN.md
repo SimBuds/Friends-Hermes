@@ -1,32 +1,21 @@
 # PLAN.md: Friends-Hermes
 
-A second Hermes Agent, on a dedicated ZBOX mini PC (the original QEMU VM on
-Casey's workstation is the rollback), that answers Casey's friends in a
-private Discord server. It is a sports-betting research assistant (odds,
-lines, scores, schedules, and pick'em, with stats not in v1) and also
-answers general questions from the web. It never bets, every number in an
+A second Hermes Agent, in its own QEMU VM on Casey's workstation, that
+answers Casey's friends in a private Discord server. It is a sports-betting
+research assistant (odds, lines, scores, schedules, and pick'em, with stats
+not in v1) and also answers general questions from the web. It never bets, every number in an
 answer comes from a documented API, not from the model, and web answers end
 with a code-written list of their sources.
 
 ## The shape of it
 
 ```text
-PC (on when Casey uses it, sleeps)           ZBOX (Debian 13, always on, Wi-Fi)
-  llama.cpp router 127.0.0.1:8080              Hermes Agent v0.23.0, base_url http://127.0.0.1:8080/v1
-  fh-tunnel user service ---- ssh -R ---->    127.0.0.1:8080 (the tunnel user's one allowed forward)
-                                               Discord gateway, allowlisted friends only
-                                               plugin: friends_odds tools  --------> The Odds API
-Discord (friends) <------------------------->  gateway
+Host                                        VM (Debian, quickemu, port 22221)
+  llama.cpp router 127.0.0.1:8080  <-----     Hermes Agent v0.23.0, base_url http://10.0.2.2:8080/v1
+                                              Discord gateway, allowlisted friends only
+                                              plugin: friends_odds tools  --------> The Odds API
+Discord (friends) <------------------------>  gateway
 ```
-
-The ZBOX replaces the VM (Debian, quickemu, SSH port 22221), which reached
-the router at `10.0.2.2:8080`. The VM stays as the rollback until the move
-is checked. The tunnel is a user service on the PC (Casey, 2026-11-15) that
-starts at login and restarts when the link drops, so the bot has the model
-whenever the PC is on and answers offline otherwise. The PC needs no SSH
-server, and the router's bind address and contract do not change. The
-ZBOX's address is kept on the PC in `~/.config/friends-hermes/zbox`, never in
-this repo.
 
 ## Decisions
 
@@ -37,12 +26,12 @@ All made by Casey on 2026-11-07 unless noted.
   sessions, skills, tokens, or Telegram.
 - **Discord, in a private server Casey owns, allowlisted by user ID.** Casey
   creates the bot and the server.
-- **Always on, model on demand** (Casey, 2026-11-15, was "started by hand
-  only" from 2026-11-07). The bot runs all the time on the ZBOX. The model
-  stays on the PC, whose one GPU slot is shared with Auto-Agent's 03:00 night
-  job, and is reached only while the PC's tunnel service is up. Otherwise
-  the bot answers offline from code, and slash commands still work. The VM
-  is the rollback, its gateway disabled (2026-11-15).
+- **Started by hand only.** Reason: the host has one GPU slot, shared with
+  Auto-Agent's 03:00 night job and hand runs, and the router serves one
+  model at a time. Friends' messages sent while the VM is off are dropped.
+  Casey boots the VM by hand, and the gateway runs inside it as a user
+  service that starts with the VM (kept 2026-11-07, after
+  `hermes gateway setup` installed it).
 - **v1 scope:** odds and lines across books, plus scores and schedules.
   Finance is out, and so are stats (below).
 - **Odds from [The Odds API](https://the-odds-api.com), free Starter plan.**
@@ -112,15 +101,6 @@ All made by Casey on 2026-11-07 unless noted.
   win rate (Casey, 2026-11-16), and marks a pick expired when its game is
   older than the API's 3 days of finals and was never graded.
 
-- **Offline reply from code** (Casey, ZBOX plan). On the ZBOX the bot runs
-  all the time but the model only while Casey's tunnel is open. A
-  `pre_llm_call` hook checks the router's `/health` (2 s) and, when nothing
-  answers, ends the turn with a fixed "offline" text and no model call
-  (v0.23.0 `agent/turn_context.py`, `{"action": "block", "message"}`). Only a
-  failed connection counts as offline, never an HTTP error, so a model swap
-  is not reported as offline. `FH_ROUTER_URL` turns it on, so the VM is
-  unchanged.
-
 Rejected sources: odds-api.io (new free keys paused, free tier for
 development only), ESPN's endpoints (undocumented), balldontlie (free covers
 one sport at 5 requests a minute), SportsDataIO free (last season,
@@ -176,44 +156,24 @@ a new session's first request held 2,736 tokens, of which 1,042 were new
 and the rest came from the router's cached prefix). On `freedom` that read
 in about 1 second, and replies generated at 41 to 51 tokens per second.
 
-## The ZBOX (moving here, 2026-11-14)
-
-The bot is moving from the VM to a fanless ZOTAC ZBOX CI321 nano, always on,
-with the model still on the PC's router (`ZBOX-HERMES-PLAN.md`). The VM
-stays as the rollback until the move is checked. Read on the box,
-2026-11-14:
-
-| Part | What is fitted | Note |
-|---|---|---|
-| OS | Debian 13.7, kernel 6.12.117, UEFI, GPT | Installed with GRUB on the removable path, because the firmware ignored the normal boot entry |
-| CPU | Intel Celeron 2961Y, 2 cores | |
-| RAM | One 2 GB DDR3L stick at 1,333 MT/s, 1.35 V (single slot) | 390 MB used at idle. The VM's gateway peaked at about 490 MB while answering, so 2 GB fits with about 900 MB spare. An 8 GB DDR3L stick is the upgrade if swap is used |
-| Disk | Toshiba MQ01ABD032, 320 GB 2.5" HDD | SMART passed, 0 reallocated, pending or uncorrectable sectors, about 5,500 hours. Lifetime maximum 76 C, so it needs airflow |
-| Network | Intel Wireless 3160 (in use), 2x Realtek RTL8111/8168 (unused) | Wi-Fi stays (Casey). DHCP from the Rogers gateway, address reserved there |
-| Admin | No `sudo`. Root work uses `su -` | The `hermes` user cannot change the system |
-
 ## Persistence split
 
-The ZBOX is rebuildable from this repo plus two hand-copied files. The VM is
-the rollback, unchanged since the cutover (2026-11-15). This repo is the
-durable home of everything except secrets and picks.
+The VM is disposable. This repo is the durable home of everything except
+secrets.
 
-| Location | Holds | Reboot | Rebuild |
-|---|---|---|---|
-| This repo | Docs, collectors, plugin, tests, `scripts/install-zbox.sh`, `scripts/fh-tunnel.sh`, `systemd/fh-tunnel.service` | Kept | Kept |
-| `~/.hermes/.env` on the ZBOX | Discord token, friends' IDs, API keys, `FH_*` settings | Kept | Lost. Copied again from the VM, or entered again by Casey |
-| `~/.hermes/config.yaml` on the ZBOX | Model, toolsets, Discord keys | Kept | Lost. `install-zbox.sh` applies it again |
-| `~/.hermes/plugins/friends_odds/` on the ZBOX | The plugin and a copy of `tools/odds_collect.py` | Kept | Lost. `install-zbox.sh` copies it again |
-| `~/.hermes/plugin-data/friends_odds/picks.json` on the ZBOX | Friends' pick'em picks | Kept | Lost. No copy anywhere by design |
-| `~/.cache/friends-hermes/odds/` on the ZBOX | Raw API responses and the last known quota | Kept | Lost, by design |
-| `~/.config/systemd/user/hermes-gateway.service` and linger on the ZBOX | The gateway's start at boot | Kept | Lost. `hermes gateway install` (answer n to "start now"), then a restart |
-| The ZBOX `tunnel` user and its `authorized_keys` | The tunnel's one allowed forward | Kept | Lost. README, Tunnel to the router, step 2 |
-| `/etc/modprobe.d/fh-wifi-awake.conf` on the ZBOX | Wi-Fi power save off | Kept | Lost. README, ZBOX setup |
-| `~/.ssh/fh_tunnel`, `~/.config/friends-hermes/zbox` and `~/.config/systemd/user/fh-tunnel.service` on the PC | The tunnel key, the ZBOX's address, the tunnel service | Kept | Lost with the PC's home. README, Tunnel to the router |
-| The VM (`~/VMs/friends-hermes`) with snapshots `clean` and `hermes-configured` | The rollback: Hermes, the old `.env` and picks as of 2026-11-15, gateway disabled | Kept | Lost with the disk image |
+| Location | Holds | VM reboot | `--snapshot apply` | Rebuild |
+|---|---|---|---|---|
+| This repo | Docs, collectors, plugin, tests | Kept | Kept | Kept |
+| `~/.hermes/.env` in the VM | Discord token, friends' IDs, API keys | Kept | Rolled back | Lost. Casey enters them again |
+| `~/.hermes/config.yaml` in the VM | Model, toolsets, Discord keys | Kept | Rolled back | Lost. The README blocks re-apply them |
+| `~/.hermes/plugins/friends_odds/` in the VM | The plugin and a copy of `tools/odds_collect.py`, copied from this repo | Kept | Rolled back | Lost. Copied again from the repo |
+| Picks in the VM (`~/.hermes/plugin-data/friends_odds/picks.json`) | Friends' pick'em picks | Kept | Rolled back | Lost. No copy anywhere by design |
+| Collector cache in the VM (`~/.cache/friends-hermes/odds/`) | Raw API responses and the last known quota | Kept | Rolled back | Lost, by design |
+| `~/.config/systemd/user/` and `/var/lib/systemd/linger/hermes` in the VM | The gateway's user service and its start at boot | Kept | Rolled back | Lost. `hermes gateway setup` installs it again |
+| VM snapshots in `~/VMs/friends-hermes` | `clean` (fresh install) and `hermes-configured` (Hermes v0.23.0, base config, SSH keys only), both 2026-11-07 | Kept | Kept | Lost with the disk image |
 
 The token, friends' IDs, and keys have no copy in this repo by design. A
-change made by hand on the ZBOX is copied here in the same phase.
+change made by hand in the VM is copied here in the same phase.
 
 ## Findings
 

@@ -1,11 +1,10 @@
 name: friends_odds
 version: "1.0"
-description: "Odds, lines and scores from The Odds API for Friends-Hermes, as tools and slash commands, pick'em, an offline reply, and a code-written Sources footer on web answers. Research only: reads public data, never bets or logs in."
+description: "Odds, lines and scores from The Odds API for Friends-Hermes, as tools and slash commands, pick'em, and a code-written Sources footer on web answers. Research only: reads public data, never bets or logs in."
 provides_tools:
   - odds_sports
   - odds_lines
   - odds_scores
 provides_hooks:
   - post_tool_call
-  - pre_llm_call
   - transform_llm_output

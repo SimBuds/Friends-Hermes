@@ -76,11 +76,10 @@ class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.saved = {k: os.environ.get(k) for k in ("ODDS_API_KEY", "FH_CONTACT", "FH_CACHE_DIR", "FH_TIMEZONE",
-                                                      "HERMES_HOME", "FH_ROUTER_URL")}
+                                                      "HERMES_HOME")}
         os.environ.update({"ODDS_API_KEY": KEY, "FH_CONTACT": "test@example.invalid",
                            "FH_CACHE_DIR": os.path.join(self.tmp.name, "cache"), "FH_TIMEZONE": "UTC",
                            "HERMES_HOME": os.path.join(self.tmp.name, "hermes")})
-        os.environ.pop("FH_ROUTER_URL", None)
         self.p = load_plugin(self.tmp.name)
         self.p.oc.sleep = lambda s: None
         self.err = io.StringIO()
@@ -154,6 +153,11 @@ class Reply(Base):
         callback, kw = ctx.hooks["transform_llm_output"]
         self.assertIs(callback, self.p.final_reply)
         self.assertEqual(kw, {"hold_stream": True})
+
+    def test_register_adds_no_pre_llm_call_hook(self):
+        ctx = FakeCtx()
+        self.p.register(ctx)
+        self.assertEqual(sorted(ctx.hooks), ["post_tool_call", "transform_llm_output"])
 
     def test_one_odds_tool_reply_is_the_tool_text_exactly(self):
         result = self.lines_result()
@@ -757,91 +761,6 @@ class Picks(Base):
         for t in threads:
             t.join()
         self.assertEqual(len(self.stored()), 9)
-
-
-class Offline(Base):
-    """pre_llm_call: with the router unreachable, answer with fixed text and make no model call (Phase Z4)."""
-
-    def hook(self, **kw):
-        args = dict(session_id="s", task_id="t", turn_id="t1", user_message="hi", conversation_history=[],
-                    is_first_turn=True, model="freedom", platform="discord", parent_session_id="", sender_id="1")
-        args.update(kw)
-        return self.p.offline_reply(**args)
-
-    def opener(self, outcome):
-        seen = []
-
-        def fake(url, timeout=None):
-            seen.append((url, timeout))
-            if isinstance(outcome, BaseException):
-                raise outcome
-            return contextlib.nullcontext(None)
-        self.p._open = fake
-        return seen
-
-    def test_register_adds_the_pre_llm_call_hook(self):
-        ctx = FakeCtx()
-        self.p.register(ctx)
-        self.assertIs(ctx.hooks["pre_llm_call"][0], self.p.offline_reply)
-
-    def test_router_up_lets_the_turn_through(self):
-        os.environ["FH_ROUTER_URL"] = "http://127.0.0.1:8080"
-        seen = self.opener(None)
-        self.assertIsNone(self.hook())
-        self.assertEqual(seen, [("http://127.0.0.1:8080/health", 2)])
-
-    def test_connection_refused_blocks_with_the_offline_text(self):
-        import urllib.error
-        os.environ["FH_ROUTER_URL"] = "http://127.0.0.1:8080"
-        self.opener(urllib.error.URLError(ConnectionRefusedError(111, "Connection refused")))
-        self.assertEqual(self.hook(), {"action": "block", "message": self.p.OFFLINE_TEXT})
-        self.assertEqual(self.p.OFFLINE_TEXT, "The assistant is offline right now. Try again later.")
-
-    def test_timeout_blocks(self):
-        os.environ["FH_ROUTER_URL"] = "http://127.0.0.1:8080"
-        self.opener(TimeoutError("timed out"))
-        self.assertEqual(self.hook()["action"], "block")
-
-    def test_http_error_counts_as_up(self):
-        import urllib.error
-        os.environ["FH_ROUTER_URL"] = "http://127.0.0.1:8080"
-        self.opener(urllib.error.HTTPError("http://127.0.0.1:8080/health", 503, "Loading model", {}, None))
-        self.assertIsNone(self.hook())
-
-    def test_unset_router_url_means_no_check(self):
-        seen = self.opener(AssertionError("must not be called"))
-        self.assertIsNone(self.hook())
-        self.assertEqual(seen, [])
-
-    def test_trailing_slash_and_v1_are_trimmed(self):
-        os.environ["FH_ROUTER_URL"] = "http://127.0.0.1:8080/v1/"
-        seen = self.opener(None)
-        self.hook()
-        self.assertEqual(seen[0][0], "http://127.0.0.1:8080/health")
-
-    def test_bad_url_lets_the_turn_through_and_logs(self):
-        os.environ["FH_ROUTER_URL"] = "not a url"
-        self.opener(ValueError("unknown url type"))
-        self.assertIsNone(self.hook())
-        self.assertIn("FH_ROUTER_URL", self.err.getvalue())
-
-    def test_any_platform_is_covered(self):
-        import urllib.error
-        os.environ["FH_ROUTER_URL"] = "http://127.0.0.1:8080"
-        self.opener(urllib.error.URLError("refused"))
-        for platform in ("discord", "cli", ""):
-            self.assertEqual(self.hook(platform=platform)["action"], "block")
-
-    def test_real_closed_port_is_offline_fast(self):
-        import socket
-        import time
-        with socket.socket() as sock:  # find a free port, then close it so nothing listens there
-            sock.bind(("127.0.0.1", 0))
-            port = sock.getsockname()[1]
-        os.environ["FH_ROUTER_URL"] = f"http://127.0.0.1:{port}"
-        start = time.monotonic()
-        self.assertEqual(self.hook()["action"], "block")
-        self.assertLess(time.monotonic() - start, 2.5)
 
 
 class Leaderboard(Base):

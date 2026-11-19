@@ -9,8 +9,6 @@ import json
 import os
 import tempfile
 import threading
-import urllib.error
-import urllib.request
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -356,44 +354,6 @@ def list_picks(source):
     return "\n".join(rows)
 
 
-
-# Offline reply: on the ZBOX the model is reached through a tunnel the PC opens by hand.
-# Before each model call, a quick look at the router's /health. When nothing answers, the turn
-# ends with fixed text and no model call (pre_llm_call "block", v0.23.0 agent/turn_context.py).
-OFFLINE_TEXT = "The assistant is offline right now. Try again later."
-HEALTH_TIMEOUT = 2
-_open = urllib.request.urlopen
-
-
-def router_reachable(base):
-    """False only when the connection fails or times out. Any HTTP answer, even a 503 while the
-    router loads a model, means it is there."""
-    try:
-        with _open(base + "/health", timeout=HEALTH_TIMEOUT):
-            return True
-    except urllib.error.HTTPError:
-        return True
-    except (urllib.error.URLError, OSError):
-        return False
-
-
-def offline_reply(platform="", **kwargs):
-    """pre_llm_call: block the turn with OFFLINE_TEXT when FH_ROUTER_URL is set and unreachable.
-    Unset means no check (the VM reaches the router directly)."""
-    del platform, kwargs
-    url = os.environ.get("FH_ROUTER_URL", "").strip().rstrip("/")
-    if not url:
-        return None
-    base = url[:-3] if url.endswith("/v1") else url
-    try:
-        up = router_reachable(base)
-    except ValueError as e:
-        oc.log(f"FH_ROUTER_URL {url!r} is not a URL ({e}). Offline check skipped.")
-        return None
-    return None if up else {"action": "block", "message": OFFLINE_TEXT}
-
-
-
 # Grading (Phase 5). Picks are graded only when someone asks for /leaderboard: there is no
 # scheduler. The API returns finals from at most 3 days back, so an open pick whose game began
 # longer ago than that and is missing from the scores can never be graded: it becomes "expired".
@@ -619,7 +579,6 @@ def register(ctx):
         del kwargs
         return show_leaderboard(raw_args)
     ctx.register_command("leaderboard", on_leaderboard, description="Pick'em standings, graded from final scores. No AI.")
-    ctx.register_hook("pre_llm_call", offline_reply)
     ctx.register_hook("post_tool_call", remember_reply)
     # hold_stream: Discord shows nothing until the rewrite, and a failed hook withholds the reply.
     ctx.register_hook("transform_llm_output", final_reply, hold_stream=True)
